@@ -191,7 +191,8 @@ class FactExtractor:
 
     async def _call_llm(self, messages: list[str]) -> list[dict]:
         """
-        调用百炼 LLM API 提取事实。
+        调用 LLM API 提取事实。
+        自动识别当前配置的模型（minimax/bailian 等）。
 
         Args:
             messages: 对话消息列表
@@ -209,43 +210,35 @@ class FactExtractor:
             ),
         )
 
-        payload = {
-            "model": self._config["model"],
-            "input": {
-                "messages": [
+        # 使用新的 LLMClient，自动识别 provider
+        from .llm_client import LLMClient
+
+        llm = LLMClient(
+            model=f"bailian/{self._config['model']}",
+            api_key=self.api_key,
+            base_url=self._config["base_url"],
+        )
+
+        try:
+            resp = await llm.chat(
+                messages=[
                     {"role": "system", "content": self.SYSTEM_PROMPT},
                     {"role": "user", "content": user_content},
-                ]
-            },
-            "parameters": {
-                "result_format": "message",
-                "temperature": 0.1,
-            },
-        }
-
-        client = self._get_client()
-        response = await client.post(
-            f"{self._config['base_url']}/services/aigc/text-generation/generation",
-            json=payload,
-        )
-        response.raise_for_status()
-
-        data = response.json()
-        output = data.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content", "")
+                ],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            output = resp.content
+        finally:
+            await llm.close()
 
         # 尝试解析 LLM 返回的 JSON
         try:
-            # LLM 可能返回带 markdown 代码块的情况
-            text = output
-            if isinstance(output, dict):
-                text = output.get("text", "")
-            if isinstance(text, str):
-                # 去掉可能的 markdown 代码块包装
-                text = text.strip()
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-                return json.loads(text)
+            text = output.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            return json.loads(text)
         except json.JSONDecodeError as e:
             raise ValueError(f"LLM 返回格式错误，无法解析 JSON: {e}\n原始输出: {output}") from e
 

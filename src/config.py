@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
         "l4_files": True
     },
     "storage": {
-        "data_dir": "src/data",
+        "data_dir": "data",
         "memory_dir": "memory"
     }
 }
@@ -74,7 +74,10 @@ class Config:
         return os.environ.get(env_var, "")
 
     def get_storage_path(self, relative_path: str) -> str:
-        base = Path(self.config.get("storage", {}).get("data_dir", "src/data"))
+        # 解析为相对于 config.py 所在目录的路径，确保无论 CWD 如何都能正确定位
+        pkg_dir = Path(__file__).parent.resolve()
+        data_dir = self.config.get("storage", {}).get("data_dir", "src/data")
+        base = (pkg_dir / data_dir).resolve()
         return str(base / relative_path)
 
 
