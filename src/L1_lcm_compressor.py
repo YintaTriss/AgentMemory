@@ -17,6 +17,11 @@ from typing import Annotated, TypedDict
 
 import httpx
 
+try:
+    from .errors import ValidationError
+except ImportError:
+    from errors import ValidationError
+
 
 # ---------------------------------------------------------------------------
 # 枚举：事实类型
@@ -201,7 +206,7 @@ class FactExtractor:
             LLM 返回的原始事实字典列表
         """
         if not self.api_key:
-            raise ValueError("API key 未设置，请先设置 api_key")
+            raise ValidationError("API key 未设置，请先设置 api_key")
 
         user_content = self.USER_PROMPT_TEMPLATE.format(
             turn_count=len(messages),
@@ -240,7 +245,7 @@ class FactExtractor:
                 text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
             return json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"LLM 返回格式错误，无法解析 JSON: {e}\n原始输出: {output}") from e
+            raise ValidationError(f"LLM 返回格式错误，无法解析 JSON: {e}\n原始输出: {output}") from e
 
         return []
 
@@ -389,7 +394,7 @@ class LCMCompressor:
             embedding 向量列表
         """
         if not self.api_key:
-            raise ValueError("API key 未设置")
+            raise ValidationError("API key 未设置")
 
         payload = {
             "model": self._config["embedding_model"],

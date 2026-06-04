@@ -8,9 +8,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-from L4_file_persist import FilePersistStore, DailyMemory
+from src.L4_file_persist import FilePersistStore, DailyMemory
 
 
 class TestDailyMemory:
