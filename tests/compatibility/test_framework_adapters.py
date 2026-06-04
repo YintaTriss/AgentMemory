@@ -196,12 +196,12 @@ class TestClaudeCodeAdapter:
             mh = MemoryHermes()
             
             adapter.bind(mh)
-            tools = adapter.export_tools(mh)
+            tools = adapter.export_tools()  # Protocol: export_tools() takes no extra args
             
             # 应该有工具列表
             assert isinstance(tools, list)
             
-            # 每个工具应该有 name 和 description
+            # 每个工具应该有 name 和 description (ClaudeCodeAdapter returns dicts for MCP)
             for tool in tools:
                 assert "name" in tool
                 assert "description" in tool
@@ -219,7 +219,7 @@ class TestClaudeCodeAdapter:
             mh = MemoryHermes()
             
             adapter.bind(mh)
-            tools = adapter.export_tools(mh)
+            tools = adapter.export_tools()  # Protocol: export_tools() takes no extra args
             
             for tool in tools:
                 # MCP 工具应该有 inputSchema
@@ -312,11 +312,14 @@ class TestLangChainAdapter:
             mh = MemoryHermes()
             
             adapter.bind(mh)
-            tools = adapter.export_tools(mh)
+            tools = adapter.export_tools()  # Protocol: export_tools() takes no extra args
             
-            # 应该能转换为 LangChain Tool
+            # 应该能转换为 LangChain Tool (returns list[ToolSpec])
+            from adapters.base import ToolSpec
             for tool in tools:
-                assert hasattr(tool, 'name') or 'name' in tool
+                assert isinstance(tool, ToolSpec)
+                assert hasattr(tool, 'name')
+                assert hasattr(tool, 'description')
         except ImportError:
             pytest.skip("LangChain 适配器尚未实现")
 
@@ -353,17 +356,25 @@ class TestOpenAIAdapter:
         """测试函数调用 schema"""
         try:
             from adapters.openai_agents import OpenAIAgentsAdapter
+            from adapters.base import ToolSpec
             from memory_manager import MemoryHermes
             
             adapter = OpenAIAgentsAdapter()
             mh = MemoryHermes()
             
             adapter.bind(mh)
-            tools = adapter.export_tools(mh)
+            tools = adapter.export_tools()  # Protocol: export_tools() returns list[ToolSpec]
             
+            assert len(tools) > 0
             for tool in tools:
-                # OpenAI function calling 格式
-                assert "type" in tool or "name" in tool
+                # ToolSpec has name and to_dict() for OpenAI function calling format
+                assert isinstance(tool, ToolSpec)
+                assert hasattr(tool, 'name')
+                assert hasattr(tool, 'to_dict')
+                tool_dict = tool.to_dict()
+                # OpenAI function calling format uses 'name' and 'parameters'
+                assert 'name' in tool_dict
+                assert 'parameters' in tool_dict
         except ImportError:
             pytest.skip("OpenAI Agents 适配器尚未实现")
 
