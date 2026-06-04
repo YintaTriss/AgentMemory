@@ -10,9 +10,9 @@ import sys
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-from L2_graph_store import GraphStore, Entity, EntityType, RelationType, Relation
+from src.L2_graph_store import GraphStore, Entity, EntityType, RelationType, Relation
 
 
 class TestEntity:
@@ -268,7 +268,7 @@ class TestGraphStore:
         store.remove_entity(entity_id)
         
         # 再次获取应该抛异常
-        from L2_graph_store import EntityNotFoundError
+        from src.L2_graph_store import EntityNotFoundError
         with pytest.raises(EntityNotFoundError):
             store.get_entity(entity_id)
     
@@ -380,7 +380,7 @@ class TestGraphStoreEdgeCases:
         """测试不存在的实体"""
         store = GraphStore(store_path)
         
-        from L2_graph_store import EntityNotFoundError
+        from src.L2_graph_store import EntityNotFoundError
         with pytest.raises(EntityNotFoundError):
             store.get_entity("nonexistent_id")
     
@@ -442,7 +442,7 @@ class TestGraphStoreEdgeCases:
         store.merge_entities(id1, id2)
         
         # 源应该被删除
-        from L2_graph_store import EntityNotFoundError
+        from src.L2_graph_store import EntityNotFoundError
         with pytest.raises(EntityNotFoundError):
             store.get_entity(id1)
         

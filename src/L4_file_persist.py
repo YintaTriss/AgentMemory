@@ -12,6 +12,11 @@ from typing import Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
+try:
+    from .errors import ValidationError
+except ImportError:
+    from errors import ValidationError
+
 
 class MemoryCategory(str, Enum):
     GENERAL = "general"
@@ -88,7 +93,7 @@ class DailyMemory:
             date = datetime.now().strftime("%Y-%m-%d")
         # 验证日期格式
         if not re.match(r"\d{4}-\d{2}-\d{2}", date):
-            raise ValueError(f"Invalid date format: {date}. Expected YYYY-MM-DD")
+            raise ValidationError(f"Invalid date format: {date}. Expected YYYY-MM-DD")
         return self.memory_dir / f"{date}.md"
 
     def _parse_time(self) -> str:
@@ -784,7 +789,7 @@ class FilePersistStore:
                 return "\n".join(lines)
 
             else:
-                raise ValueError(f"Unsupported export format: {format}")
+                raise ValidationError(f"Unsupported export format: {format}")
 
         except Exception as e:
             print(f"Error exporting memory: {e}")

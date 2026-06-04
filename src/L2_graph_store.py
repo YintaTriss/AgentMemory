@@ -15,6 +15,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+try:
+    from .errors import StorageError, NotFoundError
+except ImportError:
+    from errors import StorageError, NotFoundError
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data Enums
@@ -367,14 +372,15 @@ class GraphStore:
 # Exceptions
 # ─────────────────────────────────────────────────────────────────────────────
 
-class GraphStoreError(Exception):
+class GraphStoreError(StorageError):
     """图谱存储基础异常。"""
-    pass
+    code = "E003"
 
 
-class EntityNotFoundError(GraphStoreError):
+class EntityNotFoundError(NotFoundError):
     """实体未找到。"""
+    code = "E005"
 
     def __init__(self, entity_id: str) -> None:
-        super().__init__(f"Entity not found: {entity_id}")
+        super().__init__(f"Entity not found: {entity_id}", code="E005", context={"entity_id": entity_id})
         self.entity_id = entity_id
