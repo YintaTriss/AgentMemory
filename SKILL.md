@@ -38,14 +38,14 @@ agentmemory query "石榴籽"
 
 ## 多 Provider 自适应
 
-**环境变量自动检测**，不绑死任何 API：
+**环境变量自动检测**，纯粹根据你机器上设置了哪个 API Key 来决定用哪个 provider，不绑死任何 API：
 
-| 环境变量 | Provider | 模型 |
-|----------|----------|------|
+| 检测到环境变量 | 使用 | 模型 |
+|---------------|------|------|
 | `MINIMAX_API_KEY` | minimax | MiniMax-M2.7-highspeed |
-| `BAILIAN_API_KEY` | bailian | qwen3.6-plus |
-| `DASHSCOPE_API_KEY` | bailian | text-embedding-v3 |
-| `OPENAI_API_KEY` | openai-compatible | gpt-4o |
+| `BAILIAN_API_KEY` 或 `DASHSCOPE_API_KEY` | bailian | qwen3.6-plus + text-embedding-v3 |
+| `OPENAI_API_KEY` | openai-compatible | GPT-4o 等 |
+| 以上都没有 | MockEmbedder（离线模式） | 确定性 hash 向量 |
 
 **你有什么 API 就用什么**，自动匹配，无需配置：
 
