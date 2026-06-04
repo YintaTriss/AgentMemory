@@ -7,10 +7,34 @@ import sys
 import os
 import tempfile
 import shutil
+import copy
 from pathlib import Path
 
 # 添加 src 到 path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+@pytest.fixture(autouse=True)
+def reset_config():
+    """每个测试前重置全局配置"""
+    import importlib
+    from config import DEFAULT_CONFIG
+    
+    # 保存原始默认配置的深拷贝
+    original_default = copy.deepcopy(DEFAULT_CONFIG)
+    
+    # 重置全局配置
+    import config
+    if hasattr(config, '_config'):
+        config._config = None
+    
+    yield
+    
+    # 测试后恢复默认配置
+    DEFAULT_CONFIG.clear()
+    DEFAULT_CONFIG.update(original_default)
+    if hasattr(config, '_config'):
+        config._config = None
 
 
 @pytest.fixture
