@@ -387,4 +387,50 @@ def reset_config()      # 每个测试前重置全局配置
 
 ---
 
+## 8. T5 集成测试报告 (2026-06-04)
+
+### 8.1 测试结果摘要
+
+| 指标 | 数值 | 要求 |
+|------|------|------|
+| Total Passed | 267 | ≥ 230 |
+| Total Skipped | 52 | - |
+| Total Failed | 0 | 0 failed |
+| 通过率 | 100% (267/267) | ≥ 95% |
+
+### 8.2 新增测试套件
+
+| 测试文件 | 通过数 | 要求 | 状态 |
+|----------|--------|------|------|
+| tests/unit/test_errors.py | 19 | ≥ 15 | ✅ PASS |
+| tests/unit/test_models.py | 21 | ≥ 20 | ✅ PASS |
+
+### 8.3 T5 验收项
+
+- [x] MemoryError 7 子类全部实现并测试通过
+  - ConfigError (E001)
+  - ProviderError (E002)
+  - StorageError (E003)
+  - ValidationError (E004)
+  - NotFoundError (E005)
+  - PermissionError (E006)
+  - RateLimitError (E007)
+- [x] Pydantic v2 严格模式
+  - [x] extra=forbid 拒绝 extra 字段
+  - [x] ULID 类型验证
+  - [x] datetime UTC 验证
+  - [x] schema_version=Literal[1] 验证
+- [x] test_models.py 覆盖所有 4 个模型类
+  - Memory (8 tests)
+  - Fact (5 tests)
+  - Entity (4 tests)
+  - Relation (4 tests)
+
+### 8.4 回归修复
+
+- FrameworkAdapter Protocol 测试修复完成
+- test_framework_adapters.py: 2 failed → 0 failed
+
+---
+
 _本基线文档由 QA Team 维护，更新时同步更新本文件。_
