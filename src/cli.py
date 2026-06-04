@@ -66,6 +66,26 @@ def parse_args():
     ex.add_argument("action", help="动作名")
     ex.add_argument("params", nargs="?", default="{}", help="参数字典 JSON")
 
+    # serve [--adapter] [--port] - 启动框架适配器服务
+    serve = sub.add_parser("serve", help="启动框架适配器服务")
+    serve.add_argument(
+        "--adapter",
+        choices=["claude_code", "openclaw"],
+        default="claude_code",
+        help="选择适配器类型 (default: claude_code)"
+    )
+    serve.add_argument(
+        "--port",
+        type=str,
+        default="stdio",
+        help="传输类型或端口: stdio (MCP) 或端口号如 8765 (HTTP)"
+    )
+    serve.add_argument(
+        "--host",
+        default="localhost",
+        help="HTTP server 监听地址 (default: localhost)"
+    )
+
     return parser.parse_args()
 
 
@@ -166,6 +186,48 @@ async def cmd_execute(args):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+async def cmd_serve(args):
+    """启动框架适配器服务"""
+    from memory_manager import MemoryHermes
+    from adapters.claude_code import ClaudeCodeAdapter
+    from adapters.openclaw import OpenClawAdapter
+    
+    mh = MemoryHermes()
+    
+    if args.adapter == "claude_code":
+        adapter = ClaudeCodeAdapter()
+        adapter.bind(mh)
+        
+        if args.port == "stdio":
+            # 启动 MCP stdio server
+            print("Starting Claude Code MCP adapter in stdio mode...", file=sys.stderr)
+            adapter.run_stdio()
+        else:
+            # 启动 HTTP server
+            try:
+                port = int(args.port)
+            except ValueError:
+                port = 8765
+            print(f"Starting Claude Code MCP adapter in HTTP mode on {args.host}:{port}...", file=sys.stderr)
+            adapter.run_http(host=args.host, port=port)
+    
+    elif args.adapter == "openclaw":
+        adapter = OpenClawAdapter()
+        adapter.bind(mh)
+        
+        if args.port == "stdio":
+            print("OpenClaw adapter does not support stdio mode, starting HTTP...", file=sys.stderr)
+            port = 8765
+        else:
+            try:
+                port = int(args.port)
+            except ValueError:
+                port = 8765
+        
+        print(f"Starting OpenClaw HTTP adapter on {args.host}:{port}...", file=sys.stderr)
+        adapter.run_http_server(host=args.host, port=port)
+
+
 async def main_async():
     args = parse_args()
     try:
@@ -189,6 +251,8 @@ async def main_async():
             cmd_layer_status(args)
         elif args.command == "execute":
             await cmd_execute(args)
+        elif args.command == "serve":
+            await cmd_serve(args)
     except KeyboardInterrupt:
         print("\nInterrupted", file=sys.stderr)
         sys.exit(130)
