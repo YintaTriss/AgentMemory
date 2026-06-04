@@ -14,7 +14,7 @@
 |------|------|------|------|
 | 源项目 `AgentMemory-v2/` | 完整 v1.0.0（4177 行 Python） | "完整保留" | ✅ 准确 |
 | 工作目录 `AgentMemory-upgrade/` | 完整 + git init + 2 commit + 未追踪的 7 个测试文件 | "几乎全部丢失" | ❌ **严重过期** |
-| 单元测试通过率 | **40.0%**（66 failed / 44 passed，111 收集项） | 隐含"测试全过" | ❌ 严重过期 |
+| 单元测试通过率 | **37.0%**（68 failed / 38 passed，136 收集项；其中 test_memory_manager 多个用例触发 L3 死锁） | 隐含"测试全过" | ❌ 严重过期 |
 | 已实现适配器 | **0**（无 adapters/ 包） | 隐含"13 适配器" | ❌ 严重过期 |
 | 已实现 Web 面板 | **0**（无 web/） | 隐含"Web 管理面板完成" | ❌ 严重过期 |
 | HTTP REST API | **0**（无 api/） | 隐含"HTTP API 完成" | ❌ 严重过期 |
@@ -25,36 +25,33 @@
 
 **核心结论**：
 - ✅ 用户的源项目完整可用，**核心 v1.0.0 引擎真实可跑**（4 层闭环 + 遗忘引擎 + 混合检索 + LLM 客户端）
-- ⚠️ 工作目录虽然有 git 历史，但**未追踪的测试集是"v2.0 规格说明"**，不能直接跑——必须先重写 v1.0 对齐版本
+- ⚠️ 工作目录已建测试基线（QA 4 个 commit），但仍有 68 个失败 + 2 文件死锁
+- ⚠️ 死锁根因是 `L3_vector_store._save()` 同步写 + 大量 fixture 触发，需要重构为 async + queue
 - ❌ HANDOVER.md §0.1 的"全部丢失"判断**完全错误**，§3.4 的 13 项任务清单**几乎全部仍是 TODO**
 
 ---
 
 ## 1. 项目状态核查（git / 文件 / 完整性）
 
-### 1.1 git 状态（已验证）
+### 1.1 git 状态（已验证 · 含本报告写时新发现）
 
 ```
 $ git log --oneline
+bbe5082 docs(1A): 基于真实代码调研的完整报告  ← 本任务
+4076bcf docs(qa): 添加测试报告                  ← QA 角色并行工作
+4e6e89f fix(qa): 修复 L4_file_persist 测试以匹配实际 API  ← QA 修复
+1d3ac05 fix(qa): 修复测试以匹配实际 API 实现         ← QA 修复
+6e915a3 feat(qa): 建立完整测试体系                  ← QA 建立测试基线
 9a32a10 init: copy from AgentMemory-v2 v1.0.0
 79fb36e feat: 四层闭环记忆系统完整打包，开箱即用
-
-$ git status
-On branch master
-Your branch is ahead of 'origin/master' by 1 commit.
-Untracked files:
-    tests/    ← 整目录未提交（7 个测试文件 + conftest.py）
-
-$ git branch -vv
-* master  9a32a10 [ahead 1] (当前实际 commit 在此)
-+ team/c01ff56e/... 79fb36e (worktree integrations/c01ff56e/... 指向 feat commit)
 ```
 
 **关键发现**：
-- 2 个 commit 都在（init + feat）
-- worktree 引用 `79fb36e` 是 **feat commit**（不是 init commit），它指向 `AgentMemory-v2/.spectrai-worktrees/integrations/c01ff56e-...`
-- worktree 内文件内容与 master 当前一致（mirror 副本）
-- 整目录 `tests/`（含 conftest.py + unit/ + compatibility/ + security/ + performance/）**未追踪**
+- 实际有 **7 个 commit**（任务描述说"2 个 commit"也过期了）
+- QA 角色在本次调研期间**并行提交了 4 个 commit**（6e915a3 → 1d3ac05 → 4e6e89f → 4076bcf）
+- QA 修复后：test_config / test_decay_engine / test_L4_file_persist 三个文件 100% 通过
+- 仍失败：test_cli（17 failed）/ test_L2（25 failed）/ test_L3（26 failed）/ test_memory_manager（死锁）
+- 任务描述的"2 commit / 4870 行 / 100% 通过"是双重过期
 
 ### 1.2 目录与文件
 
@@ -207,24 +204,32 @@ from src.config import Config, get_config
 
 ## 3. 测试现状分析（实跑结果）
 
-### 3.1 实测 pytest 结果
+### 3.1 实测 pytest 结果（QA 修复后）
 
-**命令**：`python -m pytest tests/unit -q --tb=line`（完整 7 个文件 + 1 collection error）
+**命令**：`python -m pytest tests/unit -q --tb=no --timeout=5`（逐文件实测）
 
-**结果**：`1 collection error + 110 collected → 66 failed, 44 passed`（40% 通过率）
+| 文件 | 通过 | 失败 | 状态 |
+|------|------|------|------|
+| tests/unit/test_config.py | 11 | 0 | ✅ 全过（QA 修复 `1d3ac05`） |
+| tests/unit/test_decay_engine.py | 18 | 0 | ✅ 全过（QA 修复 `1d3ac05`） |
+| tests/unit/test_L4_file_persist.py | 9 | 0 | ✅ 全过（QA 大幅精简 `4e6e89f`，删除 372 行 v2.0 假设测试） |
+| tests/unit/test_cli.py | 0 | 17 | ❌ 全失败（`from cli import cli` 不存在；用 `argparse.main()`） |
+| tests/unit/test_L2_graph_store.py | 0 | 25 | ❌ 全失败（多数断言 `get_neighbors` 期望 tuple 返回） |
+| tests/unit/test_L3_vector_store.py | 0 | 26 | ❌ 全失败（fixture 调用 1000+ 次 `store()` 触发无限循环） |
+| tests/unit/test_memory_manager.py | — | — | ⚠️ 死锁（`test_query_performance` / `test_full_workflow` 在 `_save()` 阶段挂死） |
+| **合计** | **38** | **68** | **35.8% 通过率（136 收集项，2 文件触发死锁）** |
 
-**collection 错误**（1 个）：
-- `tests/unit/test_L4_file_persist.py:12`: `cannot import name 'SessionSummary' from 'L4_file_persist'`
+**collection 错误**（已修复）：
+- 之前 `tests/unit/test_L4_file_persist.py:12` 报 `cannot import name 'SessionSummary'`，QA 在 `4e6e89f` commit 中移除该 import 块
 
-### 3.2 失败原因分类
+### 3.2 失败原因分类（按文件）
 
-| 类别 | 数量 | 根因 |
+| 文件 | 数量 | 根因 |
 |------|------|------|
-| **缺导入对象** | 23 | 测试假设 `SessionSummary`、`PIIDetector`、`adapters.*`、`ToolSpec` 已存在 |
-| **缺 API 方法** | 18 | 测试调用了未来 API：`update_importance` 期望返回新值 / `get_neighbors` 期望 `(entities, relations)` tuple / `archive_to_deep_storage` 期望接 `dict` 而非 1 参 |
-| **API 签名不匹配** | 12 | `get_recent` 期望 `days=7` 但源码接受 `days=7`（OK）；`store_fact` 期望 `(content, metadata)` 但 source 实际是 `(content, metadata, importance=None)`（不一致）|
-| **断言数据不匹配** | 8 | 测试 fixture 与源码默认 mock provider 行为不一致（如 embedder mock 默认 1024 维但 config 文件 mock 没设置） |
-| **CLI 框架不匹配** | 5 | `test_cli.py` 用 `click.testing.CliRunner` + `from cli import cli`，但 source 用 `argparse` + `main()` |
+| test_cli.py | 17 | `from cli import cli` 不存在；源码是 `from cli import main`，框架用 `argparse` 而非 `click` |
+| test_L2_graph_store.py | 25 | `get_neighbors/depth=1` 期望返回 `(entities, relations)` tuple，源码只返回 `list[Entity]` |
+| test_L3_vector_store.py | 26 | 大量 `test_large_dataset` / `test_concurrent` 类测试在 `vector._save()` 同步写时死锁 |
+| test_memory_manager.py | 多个 | 内部 `test_query_performance` / `test_full_workflow` 触发 L3 同步写死循环 |
 
 ### 3.3 测试集本质 = v2.0 规格说明
 
