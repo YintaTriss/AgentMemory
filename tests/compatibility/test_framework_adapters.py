@@ -1,6 +1,19 @@
 """
 框架适配器测试
 v2.0 功能，待 T4 框架适配器实现后解冻
+
+## v2.0 套件解冻说明
+当 T4 backend2 完成框架适配器实现后：
+1. 删除本文件顶部的 pytest.skip 相关代码（如有）
+2. 填stub 函数的具体实现
+3. 运行 pytest tests/compatibility/test_framework_adapters.py 验证
+
+## Stub 函数说明（待 T4/T7 解冻时填写）
+- test_claude_code_bind_export_tools: Claude Code bind + export_tools 集成测试（由 T4 实现）
+- test_openclaw_bind_export_tools: OpenClaw bind + export_tools 集成测试（由 T4 实现）
+- test_langchain_bind_export_tools: LangChain bind + export_tools 集成测试（由 T7 实现）
+- test_openai_agents_bind_export_tools: OpenAI Agents bind + export_tools 集成测试（由 T7 实现）
+- test_crewai_bind_export_tools: CrewAI bind + export_tools 集成测试（由 T7 实现）
 """
 
 import pytest
@@ -11,9 +24,91 @@ import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
 
-# v2.0 待实现功能 - 标记整个文件
-pytestmark = pytest.mark.skip(reason="v2.0 adapters 待 T4 实现，解冻条件：adapters/ 目录完整实现")
+# v2.0 功能 - T4 完成后删除本行注释即可解冻
+pytest.skip("v2.0 套件解冻时由 T4/T7 接手实现", allow_module_level=True)
 
+
+# ============================================================================
+# v2.0 套件解冻 Stub 函数（待 T4/T7 实现）
+# ============================================================================
+
+class TestAdapterStubs:
+    """适配器 Stub 测试（v2.0 套件解冻时由 T4/T7 接手实现）"""
+    
+    def test_claude_code_bind_export_tools(self):
+        """
+        Claude Code bind + export_tools 集成测试
+        
+        v2.0 套件解冻时由 T4 填写实现：
+        1. from adapters.claude_code import ClaudeCodeAdapter
+        2. adapter = ClaudeCodeAdapter()
+        3. mh = MemoryHermes() 或 mock
+        4. adapter.bind(mh)
+        5. tools = adapter.export_tools(mh)
+        6. 验证 tools 是 list 且每个 tool 有 name/description/inputSchema
+        """
+        pytest.skip("v2.0 套件解冻时由 T4 接手实现")
+    
+    def test_openclaw_bind_export_tools(self):
+        """
+        OpenClaw bind + export_tools 集成测试
+        
+        v2.0 套件解冻时由 T4 填写实现：
+        1. from adapters.openclaw import OpenClawAdapter
+        2. adapter = OpenClawAdapter()
+        3. mh = MemoryHermes() 或 mock
+        4. adapter.bind(mh)
+        5. skills = adapter.export_skills(mh) 或 export_tools(mh)
+        6. 验证导出格式符合 OpenClaw skill manifest
+        """
+        pytest.skip("v2.0 套件解冻时由 T4 接手实现")
+    
+    def test_langchain_bind_export_tools(self):
+        """
+        LangChain bind + export_tools 集成测试
+        
+        v2.0 套件解冻时由 T7 填写实现：
+        1. from adapters.langchain import LangChainAdapter
+        2. adapter = LangChainAdapter()
+        3. mh = MemoryHermes() 或 mock
+        4. adapter.bind(mh)
+        5. tools = adapter.export_tools(mh)
+        6. 验证导出格式符合 LangChain Tool 接口
+        """
+        pytest.skip("v2.0 套件解冻时由 T7 接手实现")
+    
+    def test_openai_agents_bind_export_tools(self):
+        """
+        OpenAI Agents bind + export_tools 集成测试
+        
+        v2.0 套件解冻时由 T7 填写实现：
+        1. from adapters.openai_agents import OpenAIAgentsAdapter
+        2. adapter = OpenAIAgentsAdapter()
+        3. mh = MemoryHermes() 或 mock
+        4. adapter.bind(mh)
+        5. tools = adapter.export_tools(mh)
+        6. 验证导出格式符合 OpenAI Agents SDK FunctionTool
+        """
+        pytest.skip("v2.0 套件解冻时由 T7 接手实现")
+    
+    def test_crewai_bind_export_tools(self):
+        """
+        CrewAI bind + export_tools 集成测试
+        
+        v2.0 套件解冻时由 T7 填写实现：
+        1. from adapters.crewai import CrewAIAdapter
+        2. adapter = CrewAIAdapter()
+        3. mh = MemoryHermes() 或 mock
+        4. adapter.bind(mh)
+        5. tools = adapter.export_tools(mh)
+        6. 验证导出格式符合 CrewAI BaseTool
+        """
+        pytest.skip("v2.0 套件解冻时由 T7 接手实现")
+
+
+# ============================================================================
+# 现有测试（保持不变）
+# ============================================================================
 
 class TestAdapterContract:
     """适配器契约测试"""
