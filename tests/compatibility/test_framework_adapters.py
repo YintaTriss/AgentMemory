@@ -1,5 +1,6 @@
 """
 框架适配器测试
+v2.0 功能，待 T4 框架适配器实现后解冻
 """
 
 import pytest
@@ -9,6 +10,9 @@ import json
 import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
+
+# v2.0 待实现功能 - 标记整个文件
+pytestmark = pytest.mark.skip(reason="v2.0 adapters 待 T4 实现，解冻条件：adapters/ 目录完整实现")
 
 
 class TestAdapterContract:

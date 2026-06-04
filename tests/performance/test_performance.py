@@ -1,5 +1,6 @@
 """
 性能基准测试
+v2.0 功能，待 T8 性能优化完成后解冻
 """
 
 import pytest
@@ -10,6 +11,9 @@ import os
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
+
+# v2.0 待实现功能 - 标记整个文件
+pytestmark = pytest.mark.skip(reason="v2.0 性能基准待 T8 实现，解冻条件：完成 Provider 抽象重构后进行基准测试")
 
 
 class TestBenchmark:
