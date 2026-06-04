@@ -24,8 +24,7 @@ import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "src"))
 
-# v2.0 功能 - T4 完成后删除本行注释即可解冻
-pytest.skip("v2.0 套件解冻时由 T4/T7 接手实现", allow_module_level=True)
+# v2.0 功能 - T4 完成，解冻
 
 
 # ============================================================================
