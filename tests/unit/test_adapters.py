@@ -292,15 +292,18 @@ class TestClaudeCodeAdapter:
         assert isinstance(tools, list)
         assert len(tools) == 6
     
-    def test_export_tools_returns_dicts(self):
-        """测试 export_tools 返回字典列表"""
+    def test_export_tools_returns_tool_specs(self):
+        """测试 export_tools 返回 ToolSpec 列表"""
         from adapters.claude_code import ClaudeCodeAdapter
+        from adapters.base import ToolSpec
         adapter = ClaudeCodeAdapter()
         tools = adapter.export_tools()
         for tool in tools:
-            assert isinstance(tool, dict)
-            assert "name" in tool
-            assert "description" in tool
+            # ClaudeCode adapter now returns ToolSpec objects to match base contract
+            assert isinstance(tool, ToolSpec), f"Expected ToolSpec, got {type(tool)}"
+            assert tool.name.startswith("memory_")
+            assert hasattr(tool, "description")
+            assert hasattr(tool, "risk_level")
     
     def test_get_metadata_returns_dict(self):
         """测试 get_metadata 返回字典"""
