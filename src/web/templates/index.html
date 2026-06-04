@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentMemory Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🧠 AgentMemory Dashboard</h1>
+            <p class="subtitle">记忆系统可视化面板</p>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="memories">📚 Memories</button>
+            <button class="tab-btn" data-tab="graph">🔗 Graph</button>
+            <button class="tab-btn" data-tab="stats">📊 Stats</button>
+        </nav>
+
+        <!-- Tab Content: Memories -->
+        <section id="tab-memories" class="tab-content active">
+            <!-- Search & Actions -->
+            <div class="toolbar">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="🔍 搜索记忆内容...">
+                    <button id="search-btn" class="btn btn-primary">搜索</button>
+                </div>
+                <div class="pagination">
+                    <button id="prev-page" class="btn btn-secondary">◀ 上一页</button>
+                    <span id="page-info">第 1 页 / 共 1 页</span>
+                    <button id="next-page" class="btn btn-secondary">下一页 ▶</button>
+                </div>
+            </div>
+
+            <!-- Memories Table -->
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>内容</th>
+                            <th>重要性</th>
+                            <th>类型</th>
+                            <th>创建时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="memories-tbody">
+                        <tr><td colspan="6" class="loading">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Detail Panel -->
+            <div id="memory-detail" class="detail-panel hidden">
+                <div class="detail-header">
+                    <h3>记忆详情</h3>
+                    <button id="close-detail" class="btn btn-close">×</button>
+                </div>
+                <div id="memory-detail-content" class="detail-content"></div>
+            </div>
+        </section>
+
+        <!-- Tab Content: Graph -->
+        <section id="tab-graph" class="tab-content">
+            <div class="graph-sections">
+                <!-- Entities -->
+                <div class="graph-section">
+                    <h3>🔷 实体 (Entities)</h3>
+                    <div id="entities-container" class="tag-list">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </div>
+                
+                <!-- Relations -->
+                <div class="graph-section">
+                    <h3>🔶 关系 (Relations)</h3>
+                    <div id="relations-container" class="relation-list">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab Content: Stats -->
+        <section id="tab-stats" class="tab-content">
+            <div id="stats-container" class="stats-container">
+                <div class="loading">加载中...</div>
+            </div>
+        </section>
+
+        <!-- Error Display -->
+        <div id="error-toast" class="error-toast hidden"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
