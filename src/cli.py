@@ -70,7 +70,7 @@ def parse_args():
     serve = sub.add_parser("serve", help="启动框架适配器服务")
     serve.add_argument(
         "--adapter",
-        choices=["claude_code", "openclaw"],
+        choices=["claude_code", "openclaw", "langchain", "openai_agents", "crewai"],
         default="claude_code",
         help="选择适配器类型 (default: claude_code)"
     )
@@ -84,6 +84,20 @@ def parse_args():
         "--host",
         default="localhost",
         help="HTTP server 监听地址 (default: localhost)"
+    )
+
+    # web - 启动 Web Dashboard
+    web = sub.add_parser("web", help="启动 Web 可视化面板")
+    web.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="监听地址 (default: 0.0.0.0)"
+    )
+    web.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="监听端口 (default: 8765)"
     )
 
     return parser.parse_args()
@@ -226,6 +240,35 @@ async def cmd_serve(args):
         
         print(f"Starting OpenClaw HTTP adapter on {args.host}:{port}...", file=sys.stderr)
         adapter.run_http_server(host=args.host, port=port)
+    
+    elif args.adapter == "langchain":
+        from adapters.langchain import LangChainAdapter
+        adapter = LangChainAdapter()
+        chat_history = adapter.bind(mh)
+        print(f"LangChain adapter bound. Chat history ready: {chat_history.memory_variables}", file=sys.stderr)
+        print(f"Metadata: {adapter.get_metadata()}", file=sys.stderr)
+    
+    elif args.adapter == "openai_agents":
+        from adapters.openai_agents import OpenAIAgentsAdapter
+        adapter = OpenAIAgentsAdapter()
+        tools = adapter.bind(mh)
+        print(f"OpenAI Agents adapter bound. {len(tools)} tools available.", file=sys.stderr)
+        print(f"Metadata: {adapter.get_metadata()}", file=sys.stderr)
+    
+    elif args.adapter == "crewai":
+        from adapters.crewai import CrewAIAdapter
+        adapter = CrewAIAdapter()
+        tools = adapter.bind(mh)
+        print(f"CrewAI adapter bound. {len(tools)} tools available.", file=sys.stderr)
+        print(f"Metadata: {adapter.get_metadata()}", file=sys.stderr)
+
+
+def cmd_web(args):
+    """启动 Web Dashboard"""
+    from web.app import run_server
+    print(f"Starting AgentMemory Web Dashboard on http://{args.host}:{args.port}...", file=sys.stderr)
+    print("Press Ctrl+C to stop.", file=sys.stderr)
+    run_server(host=args.host, port=args.port)
 
 
 async def main_async():
@@ -253,6 +296,8 @@ async def main_async():
             await cmd_execute(args)
         elif args.command == "serve":
             await cmd_serve(args)
+        elif args.command == "web":
+            cmd_web(args)
     except KeyboardInterrupt:
         print("\nInterrupted", file=sys.stderr)
         sys.exit(130)
