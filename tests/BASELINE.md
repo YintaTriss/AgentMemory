@@ -178,7 +178,172 @@ python test_verify.py
 
 ---
 
-## 7. 附录
+## 7. v2.0 套件解冻清单
+
+### 7.1 待解冻测试文件
+
+| 文件 | 解冻条件 | 解冻负责人 | 状态 |
+|------|---------|---------|------|
+| tests/compatibility/test_framework_adapters.py | T4 完成 | backend2 → qa | 待解冻 |
+| tests/security/test_security.py | T6 完成 | backend | 待解冻 |
+| tests/performance/test_performance.py | T8 完成 | backend | 待解冻 |
+
+### 7.2 v2.0 套件解冻步骤
+
+#### T4 完成后解冻 compatibility/ 套件
+
+```bash
+# 1. 删除 test_framework_adapters.py 顶部的 pytest.skip
+#    将第 26 行删除：pytest.skip("v2.0 套件解冻时由 T4/T7 接手实现", allow_module_level=True)
+
+# 2. 填 stub 函数实现（见 7.3）
+
+# 3. 运行测试验证
+python -m pytest tests/compatibility/test_framework_adapters.py -v
+
+# 4. 验证无 regression
+python -m pytest tests/ -q
+```
+
+#### T5 完成后新增 src/models.py Pydantic 验证测试
+
+```bash
+# 1. 新增 tests/unit/test_models.py
+# 2. 测试 Pydantic 模型验证
+# 3. 运行 pytest tests/unit/test_models.py -v
+```
+
+#### T6+T7 完成后新增 HTTP API 集成测试
+
+```bash
+# 1. 新增 tests/integration/test_http_api.py
+# 2. 测试 REST API endpoints
+# 3. 运行 pytest tests/integration/test_http_api.py -v
+```
+
+#### T8 完成后解冻 performance/ 套件
+
+```bash
+# 1. 删除 tests/performance/test_performance.py 顶部的 pytest.skip
+# 2. 填 stub 函数实现
+# 3. 运行 pytest tests/performance/test_performance.py -v
+```
+
+### 7.3 Stub 函数实现指南（test_framework_adapters.py）
+
+当 T4/T7 完成后，按以下指南填写 stub 实现：
+
+#### test_claude_code_bind_export_tools（由 T4 实现）
+
+```python
+def test_claude_code_bind_export_tools(self):
+    """Claude Code bind + export_tools 集成测试"""
+    from adapters.claude_code import ClaudeCodeAdapter
+    from memory_manager import MemoryHermes
+    
+    adapter = ClaudeCodeAdapter()
+    mh = MemoryHermes()
+    
+    adapter.bind(mh)
+    tools = adapter.export_tools(mh)
+    
+    assert isinstance(tools, list)
+    for tool in tools:
+        assert "name" in tool
+        assert tool["name"].startswith("memory_")
+```
+
+#### test_openclaw_bind_export_tools（由 T4 实现）
+
+```python
+def test_openclaw_bind_export_tools(self):
+    """OpenClaw bind + export_tools 集成测试"""
+    from adapters.openclaw import OpenClawAdapter
+    from memory_manager import MemoryHermes
+    
+    adapter = OpenClawAdapter()
+    mh = MemoryHermes()
+    
+    adapter.bind(mh)
+    skills = adapter.export_skills(mh)
+    
+    assert isinstance(skills, list)
+    for skill in skills:
+        assert "name" in skill
+        assert "commands" in skill
+```
+
+#### test_langchain_bind_export_tools（由 T7 实现）
+
+```python
+def test_langchain_bind_export_tools(self):
+    """LangChain bind + export_tools 集成测试"""
+    from adapters.langchain import LangChainAdapter
+    from memory_manager import MemoryHermes
+    
+    adapter = LangChainAdapter()
+    mh = MemoryHermes()
+    
+    adapter.bind(mh)
+    tools = adapter.export_tools(mh)
+    
+    assert isinstance(tools, list)
+    for tool in tools:
+        assert hasattr(tool, 'name') or "name" in tool
+```
+
+#### test_openai_agents_bind_export_tools（由 T7 实现）
+
+```python
+def test_openai_agents_bind_export_tools(self):
+    """OpenAI Agents bind + export_tools 集成测试"""
+    from adapters.openai_agents import OpenAIAgentsAdapter
+    from memory_manager import MemoryHermes
+    
+    adapter = OpenAIAgentsAdapter()
+    mh = MemoryHermes()
+    
+    adapter.bind(mh)
+    tools = adapter.export_tools(mh)
+    
+    assert isinstance(tools, list)
+    for tool in tools:
+        assert "type" in tool
+        assert tool["type"] == "function"
+```
+
+#### test_crewai_bind_export_tools（由 T7 实现）
+
+```python
+def test_crewai_bind_export_tools(self):
+    """CrewAI bind + export_tools 集成测试"""
+    from adapters.crewai import CrewAIAdapter
+    from memory_manager import MemoryHermes
+    
+    adapter = CrewAIAdapter()
+    mh = MemoryHermes()
+    
+    adapter.bind(mh)
+    tools = adapter.export_tools(mh)
+    
+    assert isinstance(tools, list)
+    for tool in tools:
+        assert hasattr(tool, 'name') or "name" in tool
+```
+
+### 7.4 当前 Stub 测试列表
+
+| Stub 函数名 | 解冻责任人 | 依赖任务 |
+|------------|----------|---------|
+| test_claude_code_bind_export_tools | backend2 (T4) | T4 |
+| test_openclaw_bind_export_tools | backend2 (T4) | T4 |
+| test_langchain_bind_export_tools | qa (T7) | T7 |
+| test_openai_agents_bind_export_tools | qa (T7) | T7 |
+| test_crewai_bind_export_tools | qa (T7) | T7 |
+
+---
+
+## 8. 附录
 
 ### 7.1 conftest.py Fixtures
 
