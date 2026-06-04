@@ -119,11 +119,11 @@ def test_file_persist():
 def test_integration():
     print("\n=== [5/5] Integration (L1+L3 需要 API Key，略) ===")
     print("⚠️  L1 (LLM压缩) 和 L3 (向量检索) 需要 dashscope API Key")
-    print("   手动验证: python -c \"from src import MemoryHermes; print(MemoryHermes())\"")
+    print("   手动验证: python -c \"from agentmemory import MemoryHermes; print(MemoryHermes())\"")
     
     # 简单检查 memory_manager 能否实例化
     try:
-        from src.memory_manager import MemoryHermes
+        from agentmemory.memory_manager import MemoryHermes
         print("✅ MemoryHermes 导入成功")
     except Exception as e:
         print(f"❌ MemoryHermes 导入失败: {e}")

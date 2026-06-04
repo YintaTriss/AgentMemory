@@ -6,13 +6,11 @@ agentmemory CLI - 技能入口
 import argparse
 import asyncio
 import json
+import os
 import sys
 import traceback
 
-import os
-sys.path.insert(0, os.path.dirname(__file__))
-
-from memory_manager import MemoryHermes
+from .memory_manager import MemoryHermes
 
 
 def parse_args():

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentmemory"
 version = "1.0.0"
-description = "交响乐技能家族 - 四层闭环记忆系统，融合 Hermes + Mem0 优点"
+description = "四层闭环记忆系统 - 多 provider 自适应，pip install 后 import 即可用，不绑死任何 LLM/Embedding API"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -45,7 +45,7 @@ web = [
 ]
 
 [project.scripts]
-agentmemory = "src.cli:main"
+agentmemory = "agentmemory.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/YintaTriss/AgentMemory"
