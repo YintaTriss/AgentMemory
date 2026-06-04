@@ -1,15 +1,12 @@
 """
 Provider 抽象层测试
 测试 LLM 和 Embedder Provider 的工厂函数和实现类
-T3 后端任务实现，待 T3 完成
 """
 
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
 
-# T3 待实现功能 - 标记整个文件
-pytestmark = pytest.mark.skip(reason="v2.0 T3 Provider 抽象层待实现，解冻条件：src/providers/ 目录完整实现")
 
 # 测试目标模块（使用 src 前缀，与 pytest.ini pythonpath 配置一致）
 from src.providers.llm import (
