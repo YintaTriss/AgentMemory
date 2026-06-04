@@ -161,11 +161,13 @@ class VectorStore:
         embedding_model: str = "text-embedding-v3",
         embedding_dims: int = 1024,
         embedding_batch_size: int = 16,
+        embedder_provider = None,
     ):
         self.storage_path = storage_path
         self.embedding_model = embedding_model
         self.embedding_dims = embedding_dims
         self.embedding_batch_size = embedding_batch_size
+        self._embedder_provider = embedder_provider
 
         # 确保存储目录存在
         os.makedirs(os.path.dirname(storage_path) or ".", exist_ok=True)
@@ -208,8 +210,23 @@ class VectorStore:
 
     def _embed_single(self, text: str) -> list[float]:
         """
-        调用 DashScope embedding API（单条）
+        调用 Embedder Provider 或 DashScope embedding API（单条）
         """
+        # 如果有 embedder provider，使用它
+        if self._embedder_provider is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self._embedder_provider.embed_single(text))
+            else:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run, self._embedder_provider.embed_single(text)
+                    )
+                    return future.result()
+
         import httpx
 
         api_key = os.environ.get("DASHSCOPE_API_KEY", "")
@@ -239,11 +256,26 @@ class VectorStore:
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         """
-        批量调用 DashScope embedding API
+        批量调用 Embedder Provider 或 DashScope embedding API
         提升效率，减少 API 调用次数
         """
         if not texts:
             return []
+
+        # 如果有 embedder provider，使用它
+        if self._embedder_provider is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self._embedder_provider.embed(texts))
+            else:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run, self._embedder_provider.embed(texts)
+                    )
+                    return future.result()
 
         import httpx
 
