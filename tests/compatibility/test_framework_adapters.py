@@ -113,20 +113,20 @@ class TestAdapterContract:
     """适配器契约测试"""
     
     def test_framework_adapter_interface(self):
-        """测试 FrameworkAdapter 接口"""
+        """测试 FrameworkAdapter Protocol 接口"""
         from adapters.base import FrameworkAdapter, ToolSpec
         
-        # 验证基类存在必要方法
-        adapter = FrameworkAdapter()
+        # FrameworkAdapter 是 Protocol，检查类定义而非实例
+        # Protocol 不能直接实例化，使用运行时检查验证接口
+        assert hasattr(FrameworkAdapter, 'framework')
+        assert hasattr(FrameworkAdapter, 'bind')
+        assert hasattr(FrameworkAdapter, 'export_tools')
+        assert hasattr(FrameworkAdapter, 'get_metadata')
         
-        # 必须有 framework 属性
-        assert hasattr(adapter, 'framework')
-        
-        # 必须有 bind 方法
-        assert hasattr(adapter, 'bind')
-        
-        # 必须有 export_tools 方法
-        assert hasattr(adapter, 'export_tools')
+        # 使用具体实现类验证 Protocol 兼容性
+        from adapters.claude_code import ClaudeCodeAdapter
+        adapter = ClaudeCodeAdapter()
+        assert isinstance(adapter, FrameworkAdapter)
     
     def test_tool_spec_validation(self):
         """测试工具规格验证"""
@@ -495,9 +495,9 @@ class TestAdapterMultiTenant:
         try:
             from adapters.base import FrameworkAdapter
             
-            adapter = FrameworkAdapter()
-            
-            # 应该有命名空间支持
-            assert hasattr(adapter, 'bind') or True
+            # FrameworkAdapter 是 Protocol，检查类定义而非实例
+            # 应该有 bind 方法支持
+            assert hasattr(FrameworkAdapter, 'bind')
+            assert hasattr(FrameworkAdapter, 'get_metadata')
         except ImportError:
             pytest.skip("适配器尚未实现")
