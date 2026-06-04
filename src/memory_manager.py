@@ -41,6 +41,14 @@ try:
     from .decay_engine import DecayEngine, MemoryArchiver
 except ImportError:
     from decay_engine import DecayEngine, MemoryArchiver
+try:
+    from .providers.llm import get_llm_provider
+except ImportError:
+    from providers.llm import get_llm_provider
+try:
+    from .providers.embedder import get_embedder
+except ImportError:
+    from providers.embedder import get_embedder
 
 
 class MemoryHermes:
@@ -55,8 +63,12 @@ class MemoryHermes:
     5. 心跳触发    → 遗忘检查 + 归档低分记忆
     """
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, llm_provider: str = None, embedder_provider: str = None):
         self.config = get_config(config_path)
+        
+        # Provider 配置（运行时可覆盖）
+        self._llm_provider_name = llm_provider or self.config.get("llm_provider", "bailian")
+        self._embedder_provider_name = embedder_provider or self.config.get("embedder_provider", "dashscope")
         
         # 初始化各层
         self._init_layers()
@@ -91,10 +103,17 @@ class MemoryHermes:
         # L3: Vector 混合检索层
         if self.config.get("layers.l3_vector", True):
             vector_path = self.config.get_storage_path("vectors.json")
+            
+            # 获取 embedder provider（无 API key 时自动回退到 mock）
+            embedder = get_embedder(
+                model=self.config.get("embedding.model"),
+            )
+            
             self.vector = VectorStore(
                 storage_path=vector_path,
                 embedding_model=self.config.get("embedding.model"),
                 embedding_dims=self.config.get("embedding.dimensions"),
+                embedder_provider=embedder,
             )
             self.retriever = HybridRetriever(self.vector)
         else:
