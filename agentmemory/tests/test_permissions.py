@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
-from agentmemory.agent_permissions.permissions import (
+from agentmemory.multi_agent.permissions import (
     AgentPermission,
     PermissionContext,
     PermissionEngine,

@@ -134,17 +134,8 @@ class RuleBasedClassifier:
                 alternatives=[],
             )
 
-        # 2. 按位置排序（越靠前的关键词越重要），同时考虑路径深度
-        # 优先选择：位置靠前 AND 路径更深
-        # 位置权重：10000，深度权重：1
-        def rank_rule(item):
-            _, rule, pos = item
-            depth = len(rule["path"].split("/"))
-            # 位置权重更大，但深度也有影响
-            # 如果位置差 < 5，优先考虑深度
-            return (pos * 100 - depth, -depth)
-        
-        matched_rules.sort(key=rank_rule)
+        # 2. 按位置排序（越靠前的关键词越重要）
+        matched_rules.sort(key=lambda x: x[2])
 
         # 3. 获取最高优先级匹配的路径和标签
         best_keyword, best_rule, _ = matched_rules[0]
@@ -185,7 +176,7 @@ class RuleBasedClassifier:
         """简单分词：保留中文词组，按标点和空格分割"""
         # 首先按空格和中英文标点分割，但保留 2-4 个字的词组
         # 使用更保守的分割策略
-        tokens = re.split(r'[\s,。！？、：；""''（）【】.!?\:;"\'\(\)\[\]]+', text)
+        tokens = re.split(r'[\s,。！？、：；""''（）【】.!?;:"\'()\[\]]+', text)
         
         # 进一步处理，保留连续的中文字符序列（2-4字词）
         result: list[str] = []

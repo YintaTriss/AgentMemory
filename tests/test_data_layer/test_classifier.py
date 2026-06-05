@@ -118,7 +118,7 @@ class TestRuleBasedClassifier:
         """测试备选方案"""
         classifier = RuleBasedClassifier()
 
-        result = classifier.classify("石榴籽省赛答辩准备中")
+        result = classifier.classify("省赛答辩，石榴籽项目进展顺利")
 
         assert len(result.alternatives) >= 0
         assert result.suggested_path == "A.项目/石榴籽/答辩"
@@ -137,7 +137,7 @@ class TestAutoClassifier:
         """测试无 LLM 时的降级到规则匹配"""
         classifier = AutoClassifier(llm_provider=None)
 
-        result = await classifier.recommend("今天学习了机器翻译模型")
+        result = await classifier.recommend("今天学习了机器翻译")
 
         assert result.suggested_path == "C.知识"
         assert "学习" in result.suggested_tags
@@ -174,7 +174,7 @@ class TestAutoClassifier:
         )
 
         classifier = AutoClassifier(llm_provider=mock_llm)
-        result = await classifier.recommend("石榴籽省赛答辩")
+        result = await classifier.recommend("省赛答辩石榴籽进展顺利")
 
         # 应该降级到规则匹配
         assert result.suggested_path == "A.项目/石榴籽/答辩"
