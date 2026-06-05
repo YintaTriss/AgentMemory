@@ -107,6 +107,14 @@ class TieredLogConfig:
 
 
 @dataclass
+class LibraryConfig:
+    """Library 分类白名单配置（§5.2）"""
+    enabled: bool = True
+    whitelist_path: str = "./agentmemory/library_seeds.json"
+    max_depth: int = 4
+
+
+@dataclass
 class MemoryConfig:
     """
     AgentMemory v2.0 顶层配置
@@ -130,6 +138,7 @@ class MemoryConfig:
     multi_agent: MultiAgentConfig = field(default_factory=MultiAgentConfig)
     decay: DecayConfig = field(default_factory=DecayConfig)
     tiered_log: TieredLogConfig = field(default_factory=TieredLogConfig)
+    library: LibraryConfig = field(default_factory=LibraryConfig)
 
     def to_dict(self) -> dict:
         """转换为字典（用于序列化）"""
@@ -158,6 +167,8 @@ class MemoryConfig:
                       if isinstance(data.get("decay"), dict) else data.get("decay", DecayConfig()),
                 tiered_log=TieredLogConfig(**data.get("tiered_log", {}))
                           if isinstance(data.get("tiered_log"), dict) else data.get("tiered_log", TieredLogConfig()),
+                library=LibraryConfig(**data.get("library", {}))
+                          if isinstance(data.get("library"), dict) else data.get("library", LibraryConfig()),
             )
         
         # v1.0 迁移

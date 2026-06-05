@@ -23,6 +23,15 @@ from ..providers.protocols import (
 from ..providers.embedder import get_embedder
 from ..providers.vectorstore import get_vectorstore
 
+try:
+    from ..data import Library
+except ImportError:
+    Library = None
+try:
+    from ..data import TagIndex
+except ImportError:
+    TagIndex = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +450,7 @@ class SearchEngine:
             "embedder_model": self.embedder.model,
             "embedder_dimensions": self.embedder.dimensions,
         }
-        
+
         try:
             library_index = asyncio.get_event_loop().run_until_complete(
                 self._load_library_index()
@@ -455,8 +464,62 @@ class SearchEngine:
         except Exception:
             stats["library_entry_count"] = 0
             stats["library_category_count"] = 0
-        
+
         return stats
+
+    # ============================================================================
+    # §5.7 SearchEngine 接口契约统一入口
+    # ============================================================================
+
+    RRF_K = 60
+    VEC_WEIGHT = 0.6
+    BM25_WEIGHT = 0.4
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 10,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        mode: str = "hybrid",
+    ) -> list[MemoryEntry]:
+        """§5.7 search — 统一入口，内部路由到 search_hybrid
+
+        Args:
+            query: 查询文本
+            limit: 返回数量
+            category: 可选的分类路径
+            tags: 可选的标签过滤
+            mode: "hybrid" | "vector" | "category"
+
+        Returns:
+            MemoryEntry 列表
+        """
+        options = SearchOptions(
+            limit=limit,
+            category=category,
+            tags=tags,
+        )
+        if mode == "hybrid":
+            return await self.search_hybrid(query, category=category, options=options)
+        elif mode == "vector":
+            return await self.search_semantic(query, options=options)
+        elif mode == "category":
+            if category:
+                return await self.search_by_category(category, options=options)
+            else:
+                return []
+        else:
+            return await self.search_hybrid(query, category=category, options=options)
+
+    async def prefetch(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> list[MemoryEntry]:
+        """§5.7 prefetch — 预取语义相近的 top-K（用于 Agent 上下文注入）"""
+        options = SearchOptions(limit=limit)
+        return await self.search_semantic(query, options=options)
 
 
 def create_search_engine(

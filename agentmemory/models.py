@@ -1,6 +1,11 @@
 """
 Pydantic v2 数据契约
 定义 AgentMemory 核心数据结构
+
+v2.0 架构：
+- MemoryEntry: v2.0 主模型（schema_version=2）
+- Memory: v1.0 遗留模型（schema_version=1），保留兼容
+- Fact/Entity/Relation: v1.0 遗留类型，保守保留
 """
 from datetime import datetime, timezone
 from typing import Literal, Any
@@ -34,6 +39,47 @@ def _default_ulid() -> str:
 def _default_utcnow() -> datetime:
     """获取当前 UTC 时间"""
     return datetime.now(timezone.utc)
+
+
+class MemoryEntry(BaseModel):
+    """v2.0 主记忆模型（§7.2 MemoryEntry）
+    
+    Attributes:
+        id: ULID 唯一标识
+        content: 记忆内容（UTF-8 Markdown）
+        category: 分类路径（最多 4 层）
+        tags: 标签列表
+        metadata: 自由元数据
+        importance: 重要性分数（0-1）
+        embedding_state: 向量化状态
+        created_at: 创建时间
+        updated_at: 更新时间
+        last_access_at: 最后访问时间
+        access_count: 访问次数
+        schema_version: 固定为 2
+    """
+    model_config = ConfigDict(
+        extra="forbid",
+        ser_json_timedelta="iso8601",
+        ser_json_bytes="utf8",
+    )
+
+    id: str = Field(default_factory=_default_ulid, description="ULID 唯一标识")
+    content: str = Field(..., min_length=1, max_length=100_000, description="记忆内容")
+    category: list[str] = Field(..., min_length=1, max_length=4, description="分类路径")
+    tags: list[str] = Field(default_factory=list, max_length=50, description="标签列表")
+    metadata: dict = Field(default_factory=dict, description="自由元数据")
+    importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性分数")
+    embedding_state: Literal["pending", "generating", "completed", "failed", "permanent_failure"] = "pending"
+    created_at: datetime = Field(default_factory=_default_utcnow, description="创建时间 UTC")
+    updated_at: datetime = Field(default_factory=_default_utcnow, description="更新时间 UTC")
+    last_access_at: datetime | None = Field(default=None, description="最后访问时间")
+    access_count: int = Field(default=0, description="访问次数")
+    schema_version: Literal[2] = Field(default=2, description="Schema 版本")
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return self.model_dump()
 
 
 class Memory(BaseModel):

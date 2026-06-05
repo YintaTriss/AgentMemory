@@ -387,6 +387,52 @@ class MemoryHermes:
 
         return stats
 
+    # ============================================================================
+    # §5.11 MemoryHermes 接口契约补齐
+    # ============================================================================
+
+    async def list(
+        self,
+        category: list[str] | None = None,
+        since=None,
+        until=None,
+        limit: int = 100,
+    ) -> list[str]:
+        """§5.11 list — 列出记忆 ID 列表
+
+        Args:
+            category: 可选的分类路径过滤
+            since: 可选的起始时间
+            until: 可选的结束时间
+            limit: 返回数量上限
+
+        Returns:
+            list[str]: 记忆 ID 列表
+        """
+        # v2.0: 通过 vector store 列出
+        if self.vector:
+            all_entries = self.vector.get_all_entries()
+            ids = [e["id"] for e in all_entries]
+            return ids[:limit]
+        return []
+
+    def stats(self) -> dict:
+        """§5.11 stats — 同步统计（别名 get_stats）"""
+        return self.get_stats()
+
+    async def close(self) -> None:
+        """§5.11 close — 关闭资源（清理 asyncio tasks 等）"""
+        # 清理 session turns
+        self._session_turns = []
+        self._prefetch_cache = {}
+        # v2.0: 如果有 embedding worker task，尝试取消
+        if hasattr(self, '_embedding_worker_task') and self._embedding_worker_task:
+            self._embedding_worker_task.cancel()
+            try:
+                await self._embedding_worker_task
+            except asyncio.CancelledError:
+                pass
+
     def _graph_add_entity(self, name: str, metadata: dict):
         """辅助方法：添加实体到图谱（v2.0 已移除 GraphStore，此方法为空占位）"""
         # v2.0: L2 Graph 已移除，图谱功能由 TagIndex + Library 替代
