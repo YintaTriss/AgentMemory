@@ -51,6 +51,8 @@ class MemoryMeta:
     importance: float = 1.0
     created_at: str = ""
     updated_at: str = ""
+    last_access_at: str = ""
+    access_count: int = 0
     embedding_state: str = "pending"
     retry_count: int = 0
     
@@ -62,6 +64,8 @@ class MemoryMeta:
             "importance": self.importance,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "last_access_at": self.last_access_at,
+            "access_count": self.access_count,
             "embedding_state": self.embedding_state,
             "retry_count": self.retry_count,
         }
@@ -75,6 +79,8 @@ class MemoryMeta:
             importance=data.get("importance", 1.0),
             created_at=data.get("created_at", datetime.now().isoformat()),
             updated_at=data.get("updated_at", datetime.now().isoformat()),
+            last_access_at=data.get("last_access_at", ""),
+            access_count=data.get("access_count", 0),
             embedding_state=data.get("embedding_state", "pending"),
             retry_count=data.get("retry_count", 0),
         )
@@ -403,7 +409,7 @@ class DataLake:
         """§5.1 delete — 删除一条记忆的所有关联文件"""
         await self.delete_memory(mem_id)
 
-    async def list_memories(
+    async def list(
         self,
         category: List[str] | None = None,
         since=None,
@@ -412,17 +418,13 @@ class DataLake:
     ) -> List[str]:
         """§5.1 list — 列出符合分类 + 时间范围的 mem_id"""
         if category is None:
-            # 扫描所有分类
             all_ids = []
             for md_path in self.memory_library.rglob("*" + self.EXT_CONTENT):
                 all_ids.append(md_path.stem)
             return sorted(all_ids)[:limit]
-
         category_path = "/".join(category)
         memories = await self.scan_category(category_path, recursive=True)
         ids = [m.memory_id for m in memories][:limit]
-
-        # 时间过滤（简化：暂不支持 since/until）
         return ids
 
     async def hydrate(
@@ -444,7 +446,7 @@ class DataLake:
             return True
         return False
 
-    async def move(self, mem_id: str, new_category: list[str]) -> None:
+    async def move(self, mem_id: str, new_category: List[str]) -> None:
         """§5.1 move — 移动记忆到另一个分类"""
         old_category_path = self._find_category_for_memory(mem_id)
         if not old_category_path:
@@ -503,7 +505,7 @@ class DataLake:
         agent_id: str,
         category_path: str = "",
         recursive: bool = True,
-    ) -> list[MemoryFile]:
+    ) -> List[MemoryFile]:
         """只返回 agent 有权限看到的记忆
 
         Args:
@@ -520,7 +522,7 @@ class DataLake:
             return all_memories
 
         # 过滤无权限的记忆
-        allowed_memories: list[MemoryFile] = []
+        allowed_memories: List[MemoryFile] = []
         for mem in all_memories:
             ctx = await self._permission_engine.check(
                 agent_id, "read", mem.category_path

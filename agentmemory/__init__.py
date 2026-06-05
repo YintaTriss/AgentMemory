@@ -13,7 +13,7 @@ from .multi_agent import MultiAgentLock, SharedLog
 from .models import MemoryEntry, Memory
 
 # Data layer
-from .data.datalake import DataLake
+from .data.datalake import DataLake, MemoryMeta
 from .data.library import Library
 from .data.tag_index import TagIndex
 from .data.embedding_state import EmbeddingStateMachine, EmbeddingState
@@ -25,6 +25,10 @@ from .search.search_engine import SearchEngine
 # Decay
 from .decay_engine import DecayEngine
 
+# CLI & Web
+from . import cli
+from . import web
+
 # Providers
 try:
     from .providers.llm import get_llm_provider
@@ -32,14 +36,23 @@ except ImportError:
     get_llm_provider = None
 
 try:
-    from .providers.embedder import get_embedder
+    from .providers.embedder import get_embedder, MockEmbedder
 except ImportError:
     get_embedder = None
+    MockEmbedder = None
 
 try:
-    from .providers.vectorstore import get_vectorstore
+    from .providers.vectorstore import get_vectorstore, MockVectorStore
 except ImportError:
     get_vectorstore = None
+    MockVectorStore = None
+
+try:
+    from .workers import create_worker, EmbeddingWorker, EmbeddingStatus
+except ImportError:
+    create_worker = None
+    EmbeddingWorker = None
+    EmbeddingStatus = None
 
 __all__ = [
     # Core
@@ -54,6 +67,7 @@ __all__ = [
     "Memory",
     # Data layer
     "DataLake",
+    "MemoryMeta",
     "Library",
     "TagIndex",
     "EmbeddingStateMachine",
@@ -63,8 +77,17 @@ __all__ = [
     "SearchEngine",
     # Decay
     "DecayEngine",
+    # CLI & Web
+    "cli",
+    "web",
     # Providers
     "get_llm_provider",
     "get_embedder",
     "get_vectorstore",
+    "MockEmbedder",
+    "MockVectorStore",
+    # Workers
+    "create_worker",
+    "EmbeddingWorker",
+    "EmbeddingStatus",
 ]
