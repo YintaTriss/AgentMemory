@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 
 # 默认配置
@@ -18,6 +18,17 @@ DEFAULT_ARCHIVE_THRESHOLD: float = 0.5
 DEFAULT_MAX_ARCHIVED: int = 1000
 
 ARCHIVE_DIR = Path(__file__).parent / "data" / "archive"
+
+
+@dataclass
+class DecayPolicy:
+    """遗忘策略（可配置，与架构文档 v2-architecture.md §5.9 一致）"""
+    weight_access: float = 0.3          # log(1+access) 的指数
+    weight_importance: float = 0.4      # importance 的指数
+    weight_recency: float = 0.3         # recency 的指数
+    half_life_days: float = 30.0        # 半衰期（30天）
+    forget_threshold: float = 0.2        # 低于此值遗忘
+    archive_threshold: float = 0.5       # 低于此值归档
 
 
 @dataclass
@@ -34,198 +45,141 @@ class DecayScore:
 
 class DecayEngine:
     """
-    遗忘引擎
+    遗忘引擎 v2
     
-    基于访问频率、重要性和时效性计算记忆衰减分数
+    公式（与架构文档 v2-architecture.md §5.9 一致）:
+        score = (log(1+access))^0.3 × importance^0.4 × recency^0.3
+        recency = 0.5 ** (age_days / half_life_days)
     """
 
     def __init__(
         self,
-        half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
-        forget_threshold: float = DEFAULT_FORGET_THRESHOLD,
-        archive_threshold: float = DEFAULT_ARCHIVE_THRESHOLD,
+        policy: Optional[DecayPolicy] = None,
         max_archived: int = DEFAULT_MAX_ARCHIVED,
     ):
-        self.half_life_days = half_life_days
-        self.forget_threshold = forget_threshold
-        self.archive_threshold = archive_threshold
+        self.policy = policy or DecayPolicy()
+        self.forget_threshold = self.policy.forget_threshold
+        self.archive_threshold = self.policy.archive_threshold
         self.max_archived = max_archived
 
-    def decay_factor(self, recency_days: float, half_life_days: Optional[float] = None) -> float:
-        """
-        计算衰减因子
-        
-        公式: 2^(-recency_days / half_life_days)
-        14天前的记忆衰减到 0.5
-        
-        Args:
-            recency_days: 距离上次访问的天数
-            half_life_days: 半衰期天数
-            
-        Returns:
-            衰减因子 (0-1)
-        """
-        if half_life_days is None:
-            half_life_days = self.half_life_days
-            
-        if recency_days < 0:
-            recency_days = 0
-            
-        return 2.0 ** (-recency_days / half_life_days)
+    def _parse_timestamp(self, ts: Any) -> Optional[datetime]:
+        """解析时间戳为 datetime"""
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            if ts > 1e12:
+                ts = ts / 1000
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        if isinstance(ts, str):
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        if hasattr(ts, 'tzinfo'):
+            return ts
+        return None
 
-    def calculate_access_freq_score(self, entry: dict) -> tuple[float, str]:
-        """
-        计算访问频率评分
-        
-        Args:
-            entry: 记忆条目
-            
-        Returns:
-            (score, reason)
-        """
-        access_count = entry.get("access_count", 0)
-        
-        # 归一化: 使用对数函数平滑处理高频访问
-        # 假设访问10次以上接近饱和
-        if access_count == 0:
-            score = 0.0
-            reason = f"无访问记录 (count=0)"
-        elif access_count == 1:
-            score = 0.2
-            reason = f"仅访问1次 (count=1)"
-        elif access_count <= 3:
-            score = 0.4
-            reason = f"少量访问 (count={access_count})"
-        elif access_count <= 10:
-            score = 0.6 + 0.2 * (access_count - 3) / 7
-            reason = f"适度访问 (count={access_count})"
-        else:
-            score = min(0.8 + 0.2 * math.log10(access_count - 9), 1.0)
-            reason = f"高频访问 (count={access_count})"
-            
-        return score, reason
-
-    def calculate_recency_score(self, entry: dict) -> tuple[float, str]:
-        """
-        计算时效性评分
-        
-        Args:
-            entry: 记忆条目
-            
-        Returns:
-            (score, reason)
-        """
-        last_accessed = entry.get("last_accessed")
-        
-        if last_accessed is None:
-            # 无访问记录，检查 created_at
-            last_accessed = entry.get("created_at")
-            
-        if last_accessed is None:
-            score = 0.0
-            reason = "无时间戳信息"
-            return score, reason
-            
-        # 解析时间戳
-        if isinstance(last_accessed, (int, float)):
-            # Unix 时间戳（秒或毫秒）
-            if last_accessed > 1e12:
-                last_accessed = last_accessed / 1000
-            last_accessed_dt = datetime.fromtimestamp(last_accessed, tz=timezone.utc)
-        elif isinstance(last_accessed, str):
-            # ISO 格式字符串
-            last_accessed_dt = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))
-            # 如果解析为 naive datetime，假设为 UTC
-            if last_accessed_dt.tzinfo is None:
-                last_accessed_dt = last_accessed_dt.replace(tzinfo=timezone.utc)
-        else:
-            last_accessed_dt = last_accessed
-            if last_accessed_dt.tzinfo is None:
-                last_accessed_dt = last_accessed_dt.replace(tzinfo=timezone.utc)
-            
-        # 计算天数差
+    def _age_days(self, created_at: Any, last_accessed: Any) -> float:
+        """计算记忆年龄（天数，以最近访问时间为主）"""
+        ref_time = last_accessed or created_at
+        dt = self._parse_timestamp(ref_time)
+        if dt is None:
+            return 0.0
         now = datetime.now(timezone.utc)
-        recency_days = (now - last_accessed_dt).total_seconds() / 86400.0
-        
-        if recency_days < 0:
-            recency_days = 0
-            reason = "未来时间（异常）"
-        elif recency_days < 1:
-            reason = f"刚刚访问 ({recency_days:.1f}小时前)"
-        elif recency_days < 7:
-            reason = f"近期访问 ({recency_days:.1f}天前)"
-        elif recency_days < 14:
-            reason = f"一周前访问 ({recency_days:.1f}天前)"
-        elif recency_days < 30:
-            reason = f"较早访问 ({recency_days:.1f}天前)"
-        else:
-            reason = f"久未访问 ({recency_days:.1f}天前)"
-            
-        score = self.decay_factor(recency_days)
-        return score, reason
+        age = (now - dt).total_seconds() / 86400.0
+        return max(0.0, age)
 
     def calculate_score(self, entry: dict) -> DecayScore:
         """
-        计算综合衰减分数
+        计算综合衰减分数（架构公式）
         
-        公式: final = access_freq * 0.3 + importance * 0.3 + recency * 0.4
+        score = (log(1+access))^0.3 × importance^0.4 × recency^0.3
+        recency = 0.5 ** (age_days / half_life_days)
         
         Args:
-            entry: 记忆条目
+            entry: 记忆条目，需包含 access_count, importance, last_accessed, created_at
             
         Returns:
             DecayScore 对象
         """
         memory_id = entry.get("id") or entry.get("memory_id") or "unknown"
         
-        # 各维度得分
-        access_freq_score, access_reason = self.calculate_access_freq_score(entry)
-        importance = entry.get("importance", 0.5)  # 默认0.5
-        recency_score, recency_reason = self.calculate_recency_score(entry)
+        # 提取字段
+        access_count = entry.get("access_count", 0)
+        importance = entry.get("importance", 0.5)
+        last_accessed = entry.get("last_accessed")
+        created_at = entry.get("created_at")
         
-        # 验证 importance 范围
-        if not 0 <= importance <= 1:
-            importance = 0.5
-            
-        # 加权计算
-        final_score = (
-            access_freq_score * 0.3 +
-            importance * 0.3 +
-            recency_score * 0.4
-        )
+        # 归一化 importance
+        importance = max(0.0, min(1.0, float(importance)))
         
-        # 限制范围
+        # 计算三因子
+        # 1. 访问频率因子: (log(1+access))^0.3
+        # 注意：该值可能超过 1.0（高频访问时），最终分数会截断到 [0,1]
+        access_factor = (math.log1p(access_count)) ** self.policy.weight_access
+        
+        # 2. 重要性因子: importance^0.4
+        importance_factor = importance ** self.policy.weight_importance
+        
+        # 3. 时效性因子: recency^0.3，recency = 0.5^(age_days/half_life_days)
+        age_days = self._age_days(created_at, last_accessed)
+        recency = 0.5 ** (age_days / self.policy.half_life_days)
+        recency_factor = recency ** self.policy.weight_recency
+        
+        # 乘积为最终分数
+        final_score = access_factor * importance_factor * recency_factor
+        # 架构公式是连乘，各因子范围不同，乘积可能超 1.0，截断到 [0,1]
         final_score = max(0.0, min(1.0, final_score))
         
-        # 构建原因列表
+        # 构建原因
         reasons = [
-            f"访问频率: {access_reason}",
-            f"重要性: {importance:.2f}",
-            f"时效性: {recency_reason}",
-            f"权重计算: {access_freq_score:.2f}*0.3 + {importance:.2f}*0.3 + {recency_score:.2f}*0.4 = {final_score:.3f}",
+            f"访问频率: log(1+{access_count})^0.3 = {access_factor:.4f}",
+            f"重要性: {importance}^0.4 = {importance_factor:.4f}",
+            f"时效性: 0.5^({age_days:.1f}/{self.policy.half_life_days})^0.3 = {recency_factor:.4f}",
+            f"最终分数: {access_factor:.4f} × {importance_factor:.4f} × {recency_factor:.4f} = {final_score:.4f}",
         ]
         
-        # 详细评分说明
         if final_score < 0.2:
-            summary = "极低分 - 建议遗忘"
+            summary = "极低分 — 建议遗忘"
         elif final_score < self.forget_threshold:
-            summary = "低于遗忘阈值 - 建议遗忘"
+            summary = "低于遗忘阈值 — 建议遗忘"
         elif final_score < self.archive_threshold:
-            summary = "中等分数 - 建议归档"
+            summary = "中等分数 — 建议归档"
         else:
-            summary = "高分 - 保留"
+            summary = "高分 — 保留"
         reasons.insert(0, summary)
         
         return DecayScore(
             memory_id=memory_id,
             score=final_score,
             components={
-                "access_freq": access_freq_score,
-                "importance": importance,
-                "recency": recency_score,
+                "access_factor": access_factor,
+                "importance_factor": importance_factor,
+                "recency_factor": recency_factor,
             },
             reasons=reasons,
         )
+
+    def calculate_score_from_fields(
+        self,
+        importance: float,
+        access_count: int,
+        last_accessed: Any,
+        created_at: Any,
+    ) -> float:
+        """
+        直接从字段计算分数（符合架构协议 DecayEngine.calculate_score）
+        
+        score = (log(1+access))^0.3 × importance^0.4 × recency^0.3
+        recency = 0.5 ** (age_days / half_life_days)
+        """
+        entry = {
+            "importance": importance,
+            "access_count": access_count,
+            "last_accessed": last_accessed,
+            "created_at": created_at,
+        }
+        return self.calculate_score(entry).score
 
     def should_forget(self, score: DecayScore) -> bool:
         """
@@ -470,16 +424,17 @@ class MemoryArchiver:
 
 # 便捷函数
 def create_decay_engine(
-    half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
-    forget_threshold: float = DEFAULT_FORGET_THRESHOLD,
-    archive_threshold: float = DEFAULT_ARCHIVE_THRESHOLD,
+    half_life_days: float = 30.0,
+    forget_threshold: float = 0.2,
+    archive_threshold: float = 0.5,
 ) -> DecayEngine:
-    """创建遗忘引擎实例"""
-    return DecayEngine(
+    """创建遗忘引擎实例（兼容旧 API，内部使用 DecayPolicy）"""
+    policy = DecayPolicy(
         half_life_days=half_life_days,
         forget_threshold=forget_threshold,
         archive_threshold=archive_threshold,
     )
+    return DecayEngine(policy=policy)
 
 
 def create_archiver(
