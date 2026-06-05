@@ -12,3 +12,6 @@ dist/
 # Stale directories
 agentmemory/src/
 agentmemory/web/v2/node_modules/
+# Runtime data
+agentmemory/data/vectors.json
+agentmemory/data/archive/

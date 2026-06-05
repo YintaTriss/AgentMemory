@@ -22,6 +22,7 @@ from ..providers.protocols import (
 )
 from ..providers.embedder import get_embedder
 from ..providers.vectorstore import get_vectorstore
+from .rrf_fusion import RRFusion, RankedResult, FusionResult
 
 try:
     from ..data import Library

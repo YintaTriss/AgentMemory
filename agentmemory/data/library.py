@@ -1,6 +1,6 @@
 """
 Library - 图书馆分类管理模块
-Version: v2.0
+Version: v2.0 + Permission Integration
 
 §5.2 接口契约别名：
 - validate(path) → 检查路径是否在白名单内
@@ -13,9 +13,12 @@ Version: v2.0
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, AsyncIterator, Protocol
+from typing import Optional, AsyncIterator, Protocol, TYPE_CHECKING
 from dataclasses import dataclass, field
 import aiofiles
+
+if TYPE_CHECKING:
+    from agentmemory.agent_permissions.permissions import PermissionEngine
 
 
 MAX_CATEGORY_DEPTH = 4
@@ -64,6 +67,11 @@ class Library:
         self._lock = asyncio.Lock()
         self._whitelist = set(whitelist or ["A.项目", "B.个人", "C.临时"])
         self._tree = {}
+        self._permission_engine: "PermissionEngine | None" = None
+
+    def set_permission_engine(self, engine: "PermissionEngine") -> None:
+        """设置权限引擎"""
+        self._permission_engine = engine
 
     async def init(self):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -335,3 +343,44 @@ class Library:
     async def load(self) -> None:
         """§5.2 load — 加载白名单"""
         await self.init()
+
+    # ============================================================================
+    # 权限检查集成
+    # ============================================================================
+
+    def suggest_paths_for_agent(self, agent_id: str, partial: str = "") -> list[str]:
+        """只推荐 agent 有权限的路径
+
+        Args:
+            agent_id: Agent 唯一标识
+            partial: 部分路径（用于过滤）
+
+        Returns:
+            匹配的路径列表
+        """
+        all_categories = []
+
+        def _collect_paths(node_dict, prefix=''):
+            for name, node in node_dict.items():
+                path = f'{prefix}/{name}' if prefix else name
+                all_categories.append(path)
+                if node.children:
+                    _collect_paths(node.children, path)
+
+        _collect_paths(self._tree)
+
+        if self._permission_engine is None:
+            # 无权限引擎时返回所有匹配的部分路径
+            if partial:
+                return [c for c in all_categories if c.startswith(partial)]
+            return all_categories
+
+        # 过滤无权限的路径
+        allowed_paths: list[str] = []
+        for path in all_categories:
+            if partial and not path.startswith(partial):
+                continue
+            if self._permission_engine.is_path_visible(agent_id, path):
+                allowed_paths.append(path)
+
+        return allowed_paths

@@ -17,7 +17,7 @@ import json
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 
 # =============================================================================
@@ -115,6 +115,18 @@ class LibraryConfig:
 
 
 @dataclass
+class HybridSearchConfig:
+    """混合搜索配置（§3.2 双轨检索）"""
+    fusion_method: Literal["rrf", "rrf_weighted", "score_sum", "score_avg"] = "rrf_weighted"
+    rrf_k: int = 60
+    vector_weight: float = 0.5
+    library_weight: float = 0.3
+    tag_weight: float = 0.2
+    min_score_threshold: float = 0.01  # RRF 分数低于此值不返回
+    max_results_per_track: int = 50    # 每条轨最多返回多少结果
+
+
+@dataclass
 class MemoryConfig:
     """
     AgentMemory v2.0 顶层配置
@@ -139,6 +151,7 @@ class MemoryConfig:
     decay: DecayConfig = field(default_factory=DecayConfig)
     tiered_log: TieredLogConfig = field(default_factory=TieredLogConfig)
     library: LibraryConfig = field(default_factory=LibraryConfig)
+    hybrid_search: HybridSearchConfig = field(default_factory=HybridSearchConfig)
 
     def to_dict(self) -> dict:
         """转换为字典（用于序列化）"""
@@ -169,6 +182,8 @@ class MemoryConfig:
                           if isinstance(data.get("tiered_log"), dict) else data.get("tiered_log", TieredLogConfig()),
                 library=LibraryConfig(**data.get("library", {}))
                           if isinstance(data.get("library"), dict) else data.get("library", LibraryConfig()),
+                hybrid_search=HybridSearchConfig(**data.get("hybrid_search", {}))
+                          if isinstance(data.get("hybrid_search"), dict) else data.get("hybrid_search", HybridSearchConfig()),
             )
         
         # v1.0 迁移

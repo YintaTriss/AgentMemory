@@ -1,18 +1,22 @@
 """
 DataLake - 数据湖核心模块
-Version: v2.0 - Fixed
+Version: v2.0 - Fixed + Permission Integration
 """
 
 import asyncio
 import json
 import shutil
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 from ulid import ULID
 
 import aiofiles
+
+if TYPE_CHECKING:
+    from agentmemory.agent_permissions.permissions import PermissionEngine
+    from agentmemory.ai.classifier import AutoClassifier, ClassificationRecommendation
 
 
 @dataclass
@@ -93,6 +97,11 @@ class DataLake:
         self.memory_library = self.root_dir / memory_library_name
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
+        self._permission_engine: "PermissionEngine | None" = None
+
+    def set_permission_engine(self, engine: "PermissionEngine") -> None:
+        """设置权限引擎"""
+        self._permission_engine = engine
     
     def _validate_path(self, path: str | Path) -> Path:
         resolved = Path(path).resolve()
@@ -330,6 +339,55 @@ class DataLake:
             metadata=metadata,
         )
 
+    # ============================================================================
+    # AI 辅助分类集成
+    # ============================================================================
+
+    async def write_with_auto_classify(
+        self,
+        content: str,
+        agent_id: str = None,
+        auto_classify: bool = True,
+        classifier: "AutoClassifier | None" = None,
+    ) -> tuple[str, "ClassificationRecommendation | None"]:
+        """
+        写入记忆，自动推荐分类。
+
+        Args:
+            content: 记忆内容
+            agent_id: Agent ID（可选）
+            auto_classify: 是否自动分类
+            classifier: AutoClassifier 实例
+
+        Returns:
+            (memory_id, recommendation)
+            如果 auto_classify=False，recommendation 为 None
+        """
+        recommendation = None
+
+        if auto_classify and classifier is not None:
+            recommendation = await classifier.recommend(content)
+
+        # 先用默认路径写入（后续可调整）
+        default_category = recommendation.suggested_path if recommendation else "C.知识"
+        category_parts = default_category.split("/")
+
+        # 写入记忆
+        memory_id = await self.write(
+            content=content,
+            category=category_parts,
+            metadata={
+                "agent_id": agent_id,
+                "auto_classified": auto_classify,
+                "classification_path": default_category,
+                "classification_tags": recommendation.suggested_tags if recommendation else [],
+                "classification_confidence": recommendation.confidence if recommendation else 0.0,
+            },
+            importance=1.0,
+        )
+
+        return memory_id, recommendation
+
     async def read(self, mem_id: str) -> "MemoryContent":
         """§5.1 read — 读取一条记忆的完整内容（.md + .meta.json）"""
         return await self.get_memory(mem_id)
@@ -418,3 +476,56 @@ class DataLake:
                 meta_dict["category_path"] = new_category_path
                 async with aiofiles.open(meta_path, "w", encoding="utf-8") as f:
                     await f.write(json.dumps(meta_dict, ensure_ascii=False, indent=2))
+
+    # ============================================================================
+    # 权限检查集成
+    # ============================================================================
+
+    async def check_access(self, agent_id: str, path: str, operation: str) -> bool:
+        """检查 Agent 是否有权操作路径
+
+        Args:
+            agent_id: Agent 唯一标识
+            path: 目标路径
+            operation: 操作类型 "read" | "write" | "delete"
+
+        Returns:
+            True if allowed, False otherwise
+        """
+        if self._permission_engine is None:
+            # 无权限引擎时默认允许
+            return True
+        ctx = await self._permission_engine.check(agent_id, operation, path)
+        return ctx.granted
+
+    async def list_for_agent(
+        self,
+        agent_id: str,
+        category_path: str = "",
+        recursive: bool = True,
+    ) -> list[MemoryFile]:
+        """只返回 agent 有权限看到的记忆
+
+        Args:
+            agent_id: Agent 唯一标识
+            category_path: 分类路径（空表示根目录）
+            recursive: 是否递归子分类
+
+        Returns:
+            MemoryFile 列表（仅包含有权限访问的记忆）
+        """
+        all_memories = await self.scan_category(category_path, recursive)
+
+        if self._permission_engine is None:
+            return all_memories
+
+        # 过滤无权限的记忆
+        allowed_memories: list[MemoryFile] = []
+        for mem in all_memories:
+            ctx = await self._permission_engine.check(
+                agent_id, "read", mem.category_path
+            )
+            if ctx.granted:
+                allowed_memories.append(mem)
+
+        return allowed_memories
