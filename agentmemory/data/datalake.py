@@ -209,7 +209,7 @@ class DataLake:
             return MemoryContent(memory_id=memory_id, content=content, metadata=meta_data)
         return None
     async def update_memory(self, memory_id: str, content=None, tags=None, importance=None) -> None:
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             raise MemoryNotFoundError(f"Memory not found: {memory_id}")
         category_path = memory_content.metadata.get("category_path", "")
@@ -239,7 +239,7 @@ class DataLake:
             await asyncio.to_thread(tmp_meta.replace, meta_path)
 
     async def delete_memory(self, memory_id: str) -> None:
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             raise MemoryNotFoundError(f"Memory not found: {memory_id}")
         category_path = memory_content.metadata.get("category_path", "")
@@ -252,13 +252,13 @@ class DataLake:
                     file_path.unlink()
 
     async def get_memory_metadata(self, memory_id: str):
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             return None
         return MemoryMeta.from_dict(memory_content.metadata)
     
     async def update_memory_metadata(self, memory_id: str, tags=None, importance=None, embedding_state=None) -> None:
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             raise MemoryNotFoundError(f"Memory not found: {memory_id}")
         category_path = memory_content.metadata.get("category_path", "")
@@ -284,7 +284,7 @@ class DataLake:
         await asyncio.to_thread(tmp_meta.replace, meta_path)
 
     async def save_vector(self, memory_id: str, vector: list[float], model: str, dimensions: int) -> None:
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             raise MemoryNotFoundError(f"Memory not found: {memory_id}")
         category_path = memory_content.metadata.get("category_path", "")
@@ -296,7 +296,7 @@ class DataLake:
         await asyncio.to_thread(tmp_path.replace, paths["vector"])
 
     async def get_vector(self, memory_id: str):
-        memory_content = await self.read_memory(memory_id)
+        memory_content = await self.get_memory(memory_id)
         if memory_content is None:
             return None
         category_path = memory_content.metadata.get("category_path", "")

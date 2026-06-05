@@ -582,7 +582,7 @@ class SearchEngine:
         
         return final_results
 
-
+    async def index_entry(
         self,
         id: str,
         content: str,

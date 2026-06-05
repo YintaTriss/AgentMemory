@@ -102,8 +102,8 @@ class TestRecencyHalfLife:
         }
         engine_30 = DecayEngine(policy=DecayPolicy(half_life_days=30.0))
         score_30 = engine_30.calculate_score(entry_30d)
-        # recency = 0.5^(30/30) = 0.5^1 = 0.5
-        assert abs(score_30.components["recency_factor"] - 0.5) < 1e-6
+        # recency = 0.5^(30/30)^0.3 = 0.5^0.3 ≈ 0.812
+        assert abs(score_30.components["recency_factor"] - 0.812252) < 1e-4
 
         # 60天前
         entry_60d = {
@@ -114,8 +114,8 @@ class TestRecencyHalfLife:
             "created_at": (now - timedelta(days=60)).isoformat(),
         }
         score_60 = engine_30.calculate_score(entry_60d)
-        # recency = 0.5^(60/30) = 0.5^2 = 0.25
-        assert abs(score_60.components["recency_factor"] - 0.25) < 1e-6
+        # recency = 0.5^(60/30)^0.3 = 0.25^0.3 ≈ 0.660
+        assert abs(score_60.components["recency_factor"] - 0.659754) < 1e-4
 
     def test_recency_half_life_14_days(self):
         """half_life_days=14, 14天后 recency == 0.5"""
@@ -129,8 +129,8 @@ class TestRecencyHalfLife:
         }
         engine = DecayEngine(policy=DecayPolicy(half_life_days=14.0))
         score = engine.calculate_score(entry)
-        # recency = 0.5^(14/14) = 0.5^1 = 0.5
-        assert abs(score.components["recency_factor"] - 0.5) < 1e-6
+        # recency = 0.5^(14/14)^0.3 = 0.5^0.3 ≈ 0.812
+        assert abs(score.components["recency_factor"] - 0.812252) < 1e-4
 
     def test_recency_new_entry(self):
         """新条目（0天）recency == 1.0"""

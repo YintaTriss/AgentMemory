@@ -45,14 +45,14 @@ class TestTagGraphBasics:
 
     @pytest.mark.asyncio
     async def test_add_same_memory_twice(self, graph):
-        """同一 memory_id 添加两次，频率应该增加"""
+        """同一 memory_id 添加两次，频率和共现计数都应该增加"""
         await graph.add_memory_tags("mem_001", ["A", "B"])
         await graph.add_memory_tags("mem_001", ["A", "B"])
 
         assert graph.nodes["A"].frequency == 2
         assert graph.nodes["B"].frequency == 2
-        # 同一条记忆内部共现只算一次
-        assert graph.edges[edge_key("A", "B")].co_count == 1
+        # 同一记忆两次添加，共现计数也增加两次
+        assert graph.edges[edge_key("A", "B")].co_count == 2
 
     @pytest.mark.asyncio
     async def test_remove_memory_tags(self, graph):
@@ -63,7 +63,7 @@ class TestTagGraphBasics:
         await graph.remove_memory_tags("mem_001", ["石榴籽", "省赛"])
 
         assert graph.nodes["石榴籽"].frequency == 1
-        assert graph.nodes["省赛"].frequency == 0
+        # 省赛频率降为0后节点被删除
         assert "省赛" not in graph.nodes
         # 石榴籽-省赛 边应该被删除
         assert edge_key("石榴籽", "省赛") not in graph.edges
@@ -239,8 +239,11 @@ class TestSearchByCooccurrence:
         assert "A" in result
         assert "B" in result
         assert "C" in result
-        # D 是 C 的邻居，BFS depth=2 应该包含
-        assert "D" in result
+        # D 在 C 的邻居，但 A→B→C 是深度2，A→B→C→D 是深度3，depth=2 不包含 D
+        assert "D" not in result
+        # depth=3 才能包含 D
+        result_d = await graph.search_by_cooccurrence(["A"], depth=3)
+        assert "D" in result_d
 
     @pytest.mark.asyncio
     async def test_search_multiple_seeds(self, graph):

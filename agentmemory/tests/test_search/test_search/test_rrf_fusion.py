@@ -253,7 +253,6 @@ async def test_search_hybrid_rrf_integration(tmp_path):
     # 创建 SearchEngine（使用简单的 mock embedder）
     se = SearchEngine(
         memory_dir=str(tmp_path),
-        datalake=dl,
     )
     
     # 验证 SearchEngine 有 RRF 方法

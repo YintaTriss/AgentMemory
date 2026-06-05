@@ -137,9 +137,9 @@ class RRFusion:
         for ranked_list in ranked_lists:
             for result in ranked_list:
                 memory_id = result.memory_id
-                # rank 从 1 开始，所以 rank_i = result.rank + 1 (因为我们存储的 rank 已经是 0-based index + 1)
-                # 但查看 RankedResult.rank 的定义，它应该已经是 1-based 排名
-                rank_position = result.rank + 1  # 转换为 1-based
+                # RRF 公式: score(d) = Σ 1/(k + rank_i(d)), rank_i 从 1 开始
+                # RankedResult.rank 是 1-based 排名，直接使用
+                rank_position = result.rank
 
                 rrf = 1.0 / (self.k + rank_position)
 

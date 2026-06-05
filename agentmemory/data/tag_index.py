@@ -37,6 +37,7 @@ class TagIndex:
         self.index_file = self.root_dir / TAGS_INDEX_FILE
         self._lock = asyncio.Lock()
         self._index: dict = defaultdict(set)
+        self._cooccurrence_graph = None  # optional TagCooccurrenceGraph reference
 
     async def init(self):
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -172,3 +173,49 @@ class TagIndex:
     async def load(self) -> None:
         """§5.4 load — 加载索引文件"""
         await self.init()
+
+    # ============================================================================
+    # Tag Cooccurrence Graph Integration
+    # ============================================================================
+
+    def set_cooccurrence_graph(self, graph) -> None:
+        """设置共现图谱引用，用于查询增强"""
+        self._cooccurrence_graph = graph
+
+    async def update_cooccurrence_graph(self, tags: list[str]) -> None:
+        """写入 Tags 时同步更新共现图谱"""
+        if not self._cooccurrence_graph or not tags:
+            return
+        await self._cooccurrence_graph.add_memory_tags(memory_id="", tags=tags)
+
+    async def query_with_cooccurrence(
+        self,
+        tags: list[str],
+        include_related: bool = True,
+        max_related: int = 10,
+    ) -> list[str]:
+        """
+        结合共现图谱查询。
+        1. 查询包含 input_tags 的记忆
+        2. 如果 include_related=True，扩展查询共现 Tags
+        3. 返回扩展后的 memory_ids
+        """
+        # 1. 查询包含 input_tags 的记忆
+        result: set = set()
+        for tag in tags:
+            entries = await self.get_by_tag(tag)
+            for mid, _ in entries:
+                result.add(mid)
+
+        if not include_related or not self._cooccurrence_graph or not tags:
+            return list(result)
+
+        # 2. 扩展查询共现 Tags
+        related_tags = await self._cooccurrence_graph.suggest_tags(tags, top_k=max_related)
+
+        for related_tag, _ in related_tags:
+            entries = await self.get_by_tag(related_tag)
+            for mid, _ in entries:
+                result.add(mid)
+
+        return list(result)
