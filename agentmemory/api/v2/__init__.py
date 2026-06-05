@@ -1,4 +1,4 @@
 # AgentMemory v2.0 API
-from .app import create_app, app
+from .app import create_app, router
 
-__all__ = ['create_app', 'app']
+__all__ = ['create_app', 'router']

@@ -3,9 +3,12 @@ __pycache__/
 *.pyo
 src/__pycache__/
 src/data/
-data/
+memory/
 memory/memory/
 memory/memory/*.md
 *.egg-info/
 build/
 dist/
+# Stale directories
+agentmemory/src/
+agentmemory/web/v2/node_modules/
