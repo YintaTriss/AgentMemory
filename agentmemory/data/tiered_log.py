@@ -107,12 +107,11 @@ class TieredLog:
         self._today_file = self.recent_dir / (today + ".jsonl")
 
     async def _save_manifest(self):
-        async with self._lock:
-            self._manifest.last_updated = datetime.now().isoformat()
-            tmp = self.manifest_file.with_suffix('.tmp')
-            async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(self._manifest.to_dict(), ensure_ascii=False, indent=2))
-            tmp.replace(self.manifest_file)
+        self._manifest.last_updated = datetime.now().isoformat()
+        tmp = self.manifest_file.with_suffix('.tmp')
+        async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(self._manifest.to_dict(), ensure_ascii=False, indent=2))
+        tmp.replace(self.manifest_file)
 
     def _get_date_prefix(self) -> str:
         return datetime.now().strftime("%Y-%m-%d")
@@ -137,6 +136,7 @@ class TieredLog:
         if not self._write_buffer:
             return
         async with self._lock:
+            entries_flushed = len(self._write_buffer)
             log_file = self._today_file or self._get_log_file()
             async with aiofiles.open(log_file, 'a', encoding='utf-8') as f:
                 while self._write_buffer:
@@ -147,8 +147,9 @@ class TieredLog:
             if self._manifest:
                 date = log_file.stem
                 size = log_file.stat().st_size if log_file.exists() else 0
-                self._manifest.recent_files[date] = {"size": size, "entries": self._manifest.recent_files.get(date, {}).get("entries", 0) + 1}
-                self._manifest.total_entries += 1
+                entries_count = self._manifest.recent_files.get(date, {}).get("entries", 0) + entries_flushed
+                self._manifest.recent_files[date] = {"size": size, "entries": entries_count}
+                self._manifest.total_entries += entries_flushed
                 await self._save_manifest()
 
     async def flush(self):
@@ -227,7 +228,10 @@ class TieredLog:
                     if line.strip():
                         entry = LogEntry.from_dict(json.loads(line))
                         entry_ts = datetime.fromisoformat(entry.timestamp)
-                        if since <= entry_ts <= until:
+                        # Normalize to local naive datetimes for comparison
+                        since_naive = since.astimezone().replace(tzinfo=None) if since.tzinfo else since
+                        until_naive = until.astimezone().replace(tzinfo=None) if until.tzinfo else until
+                        if since_naive <= entry_ts <= until_naive:
                             results.append(entry)
         return results
 

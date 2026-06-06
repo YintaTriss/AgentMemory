@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentmemory"
-version = "1.0.0"
-description = "四层闭环记忆系统 - 多 provider 自适应，pip install 后 import 即可用，不绑死任何 LLM/Embedding API"
+version = "2.0.1"
+description = "双轨检索 + 图书馆分类 - 工业级 Agent 长期记忆，零依赖，pip install 后 import 即可用"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

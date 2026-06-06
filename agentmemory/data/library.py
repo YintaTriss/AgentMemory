@@ -31,17 +31,19 @@ class CategoryNode:
     """§5.2 CategoryNode — 分类树节点
 
     Attributes:
-        code: 分类代码（顶级为单字母如 'A'，子级为名称）
-        path: 完整路径，如 ["A.项目", "石榴籽", "语料"]
+        name: 分类名称
+        path: 完整路径列表，如 ["A.项目", "石榴籽", "语料"]
         depth: 深度（0 = 顶级）
         children: 子分类 dict[name, CategoryNode]
         description: 分类描述
+        metadata: 分类元数据
     """
-    code: str
+    name: str
     path: list[str]
     depth: int
     children: dict = field(default_factory=dict)
     description: str = ''
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -87,7 +89,8 @@ class Library:
 
     def _node_to_dict(self, node):
         return {
-            'name': node.name, 'path': node.path, 'metadata': node.metadata,
+            'name': node.name, 'path': node.path, 'depth': node.depth,
+            'metadata': node.metadata,
             'children': {n: self._node_to_dict(c) for n, c in node.children.items()}
         }
 
@@ -96,15 +99,20 @@ class Library:
 
     def _dict_to_node(self, data):
         children = {n: self._dict_to_node(c) for n, c in data.get('children', {}).items()}
-        return CategoryNode(name=data['name'], path=data['path'], 
-                          metadata=data.get('metadata', {}), children=children)
+        return CategoryNode(
+            name=data['name'],
+            path=data['path'],
+            depth=data.get('depth', 0),
+            metadata=data.get('metadata', {}),
+            children=children
+        )
 
     async def _save_index(self):
-        async with self._lock:
-            tmp = self.index_file.with_suffix('.tmp')
-            async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(self._serialize_tree(), ensure_ascii=False, indent=2))
-            tmp.replace(self.index_file)
+        # Note: Caller must hold self._lock
+        tmp = self.index_file.with_suffix('.tmp')
+        async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(self._serialize_tree(), ensure_ascii=False, indent=2))
+        tmp.replace(self.index_file)
 
     def get_whitelist(self): return sorted(list(self._whitelist))
     def add_to_whitelist(self, c): self._whitelist.add(c)
@@ -136,8 +144,7 @@ class Library:
     async def create_category(self, path, metadata=None, allow_new_top_level=False):
         async with self._lock:
             depth = self._get_depth(path)
-            if depth > MAX_CATEGORY_DEPTH:
-                raise CategoryDepthExceededError(f'分类深度 {depth} 超过最大限制 {MAX_CATEGORY_DEPTH}')
+            # 动态深度：允许任意深度，复杂的事情自然深，简单的事情一层就够
             if self._category_exists(path):
                 raise CategoryAlreadyExistsError(f'分类已存在: {path}')
             top_level = path.split(CATEGORY_SEPARATOR)[0]
@@ -148,7 +155,7 @@ class Library:
             current = self._tree
             for i, part in enumerate(parts):
                 if part not in current:
-                    current[part] = CategoryNode(name=part, path=CATEGORY_SEPARATOR.join(parts[:i+1]),
+                    current[part] = CategoryNode(name=part, path=parts[:i+1], depth=i,
                                                children={}, metadata=metadata if i == len(parts)-1 else {})
                 current = current[part].children
             await self._save_index()
@@ -222,19 +229,17 @@ class Library:
 
         Raises:
             CategoryNotInWhitelistError: 路径不在白名单
-            CategoryDepthExceededError: 深度 > MAX_DEPTH
         """
         path_str = CATEGORY_SEPARATOR.join(path)
         depth = len(path)
-        if depth > MAX_CATEGORY_DEPTH:
-            raise CategoryDepthExceededError(f'分类深度 {depth} 超过最大限制 {MAX_CATEGORY_DEPTH}')
+        # 动态深度：允许任意深度
         top_level = path[0] if path else ''
         if not self.is_in_whitelist(path_str):
             raise CategoryNotInWhitelistError(f'分类不在白名单: {path_str}')
         node = self._get_node(path_str)
         return CategoryNode(
             name=self._get_category_name(path_str),
-            path=path_str,
+            path=path,
             depth=depth,
             children=node.children if node else {},
             description=node.metadata.get('description', '') if node else '',
@@ -293,8 +298,7 @@ class Library:
         new_path = parent + [name]
         new_path_str = CATEGORY_SEPARATOR.join(new_path)
         depth = len(new_path)
-        if depth > MAX_CATEGORY_DEPTH:
-            raise CategoryDepthExceededError(f'分类深度 {depth} 超过最大限制 {MAX_CATEGORY_DEPTH}')
+        # 动态深度：允许任意深度
         if self._category_exists(new_path_str):
             raise CategoryAlreadyExistsError(f'分类已存在: {new_path_str}')
         await self.create_category(
@@ -304,7 +308,7 @@ class Library:
         )
         return CategoryNode(
             name=name,
-            path=new_path_str,
+            path=new_path,
             depth=depth,
             children={},
             description=description,

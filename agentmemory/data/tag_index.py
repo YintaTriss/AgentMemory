@@ -57,11 +57,10 @@ class TagIndex:
                 for tag, entries in self._index.items()}
 
     async def _save_index(self):
-        async with self._lock:
-            tmp = self.index_file.with_suffix('.tmp')
-            async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(self._to_dict(), ensure_ascii=False, indent=2))
-            tmp.replace(self.index_file)
+        tmp = self.index_file.with_suffix('.tmp')
+        async with aiofiles.open(tmp, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(self._to_dict(), ensure_ascii=False, indent=2))
+        tmp.replace(self.index_file)
 
     async def add_tag(self, tag: str, memory_id: str, category_path: str):
         async with self._lock:

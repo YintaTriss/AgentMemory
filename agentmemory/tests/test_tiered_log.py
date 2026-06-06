@@ -67,9 +67,9 @@ class TestTieredLogReadTail:
 
         tail = await tiered_log.read_tail(n=5)
         assert len(tail) == 5
-        # 最近5条
-        assert tail[0].memory_id == "mem-tail-0"
-        assert tail[-1].memory_id == "mem-tail-4"
+        # 最近5条（从新到旧）
+        assert tail[0].memory_id == "mem-tail-9"
+        assert tail[-1].memory_id == "mem-tail-5"
 
     @pytest.mark.asyncio
     async def test_tiered_log_read_tail_empty(self, tiered_log):

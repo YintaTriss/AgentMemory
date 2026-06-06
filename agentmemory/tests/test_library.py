@@ -38,11 +38,12 @@ class TestLibraryValidate:
             library.validate(["..", "..", "etc", "passwd"])
 
     @pytest.mark.asyncio
-    async def test_library_validate_depth_exceeded(self, library):
-        """超过最大深度被拒绝"""
+    async def test_library_validate_depth_dynamic(self, library):
+        """动态深度：允许任意层级深度，复杂的事情自然深"""
         await library.init()
-        with pytest.raises(CategoryDepthExceededError):
-            library.validate(["A.项目", "B", "C", "D", "E"])
+        # 深度为5的分类现在是允许的（无硬性限制）
+        result = library.validate(["A.项目", "B", "C", "D", "E"])
+        assert result is not None  # validate returns the CategoryNode if valid
 
     @pytest.mark.asyncio
     async def test_library_validate_invalid_whitelist(self, library):
@@ -91,15 +92,16 @@ class TestLibraryAddSubcategory:
         assert "test_child" in node.path
 
     @pytest.mark.asyncio
-    async def test_library_add_subcategory_depth_exceeded(self, library):
-        """添加子分类超过深度限制"""
+    async def test_library_add_subcategory_depth_dynamic(self, library):
+        """动态深度：允许无限深度添加子分类"""
         await library.init()
         await library.create_category("A.项目/B/C/D", allow_new_top_level=True)
-        with pytest.raises(CategoryDepthExceededError):
-            await library.add_subcategory(
-                parent=["A.项目", "B", "C", "D"],
-                name="E",
-            )
+        # 现在允许无限深度添加子分类
+        node = await library.add_subcategory(
+            parent=["A.项目", "B", "C", "D"],
+            name="E",
+        )
+        assert node is not None
 
 
 class TestLibraryCRUD:

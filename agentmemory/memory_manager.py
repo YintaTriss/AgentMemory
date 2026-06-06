@@ -241,7 +241,8 @@ class MemoryHermes:
                 self.vector.update_importance(memory_id, 0.0)
 
         if self.archiver and not permanent:
-            self.archiver.archive_to_deep_storage(memory_id)
+            memory_data = self.vector.get(memory_id) if self.vector else None
+            self.archiver.archive_to_deep_storage(memory_id, memory_data)
 
         return True
 
@@ -315,11 +316,8 @@ class MemoryHermes:
 
         # 写入 L4 会话总结
         if self.files:
-            self.files.append_session_summary(
-                turn_count=stats["total_turns"],
-                duration=session_duration,
-                summary=summary
-            )
+            session_entry = f"[会话总结] turns={stats['total_turns']}, duration={session_duration:.1f}s, summary={summary}"
+            self.files.store_fact(session_entry, {"category": "general"})
 
         # 清理
         self._session_turns = []
@@ -344,10 +342,12 @@ class MemoryHermes:
         result = self.decay.run_decay_check(all_entries)
 
         # 执行遗忘
-        for memory_id in result.get("forget", []):
+        for item in result.get("forget", []):
+            memory_id = item["entry"]["id"]
             await self.forget(memory_id, permanent=True)
 
-        for memory_id in result.get("archive", []):
+        for item in result.get("archive", []):
+            memory_id = item["entry"]["id"]
             await self.forget(memory_id, permanent=False)
 
         return {
