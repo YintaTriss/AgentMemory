@@ -536,3 +536,28 @@ Max:   0.87KB
 ---
 
 _本基线文档由 QA Team 维护，更新时同步更新本文件。_
+
+---
+
+## v0.3.0 性能基线（2026-06-07）
+
+### 核心操作性能基线
+
+| Operation | Time (ms) | Limit | Status |
+|-----------|----------|-------|--------|
+| add | 1.6 | 100ms | ✓ PASS |
+| search | 0.27 | 50ms | ✓ PASS |
+| list | 0.45 | 50ms | ✓ PASS |
+
+### 安全测试 P0 状态
+
+| 测试 | 状态 |
+|------|------|
+| test_api_key_validation | SKIPPED (embedder不在src) |
+| test_hmac_signature_sign_verify | PASS |
+| test_hmac_signature_verify_on_change | PASS |
+| test_file_lock_concurrency | PASS |
+| test_async_concurrent_add | PASS |
+| test_write_non_blocking | PASS |
+| test_prompt_injection_keywords | PASS |
+
