@@ -247,4 +247,4 @@ class TestCLIExecuteCommand:
             mock_instance.execute = MagicMock(return_value={"success": True, "results": []})
             mock_mh.return_value = mock_instance
             
-            result
+            result = subprocess.run([sys.executable, "-m", "src.cli", "execute", "query", '{"query": "test"}'], capture_output=True, text=True, cwd=Path(__file__).parent.parent)
