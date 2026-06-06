@@ -247,4 +247,4 @@ class TestCLIExecuteCommand:
             mock_instance.execute = MagicMock(return_value={"success": True, "results": []})
             mock_mh.return_value = mock_instance
             
-            resul
+            result
