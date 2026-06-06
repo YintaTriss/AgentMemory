@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """
 AgentMemory 测试套件
 
@@ -11,6 +10,3 @@ AgentMemory 测试套件
 """
 
 __version__ = "1.0.0"
-=======
-"""AgentMemory 测试套件"""
->>>>>>> daa3482 (feat: v0.3 - simplify to 3-layer architecture (L4/L3/L1))
