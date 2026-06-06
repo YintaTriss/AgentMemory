@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentMemory - 记忆系统</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .header h1 { color: #667eea; margin-bottom: 8px; }
+        .header p { color: #666; }
+        .main-layout {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .main-layout { grid-template-columns: 1fr; }
+        }
+        .sidebar {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+        .nav-item {
+            padding: 12px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.2s;
+        }
+        .nav-item:hover { background: #f3f4f6; }
+        .nav-item.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+        .content {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .form-group { margin-bottom: 20px; }
+        .form-label { display: block; font-weight: 500; margin-bottom: 8px; color: #333; }
+        .form-input, .form-textarea, .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+        .form-input:focus, .form-textarea:focus { outline: none; border-color: #667eea; }
+        .form-textarea { min-height: 120px; resize: vertical; }
+        .btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .result-box {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f9fafb;
+            border-radius: 10px;
+            font-family: monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            display: none;
+        }
+        .result-box.show { display: block; }
+        .card {
+            background: #f9fafb;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-left: 4px solid #667eea;
+        }
+        .card-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+        .card-score { color: #667eea; font-weight: 600; font-size: 14px; }
+        .card-content { color: #333; line-height: 1.5; margin-bottom: 10px; }
+        .card-meta { display: flex; gap: 10px; font-size: 12px; color: #666; }
+        .card-tag { background: #e5e7eb; padding: 2px 8px; border-radius: 4px; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .stat-value { font-size: 32px; font-weight: 700; }
+        .stat-label { font-size: 13px; opacity: 0.9; }
+        .range-container { display: flex; align-items: center; gap: 16px; }
+        .range-slider { flex: 1; height: 8px; border-radius: 4px; background: #e5e7eb; }
+        .range-value { min-width: 40px; padding: 8px 12px; background: #f3f4f6; border-radius: 6px; font-weight: 600; color: #667eea; text-align: center; }
+        .flex-inline { display: flex; gap: 12px; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🧠 AgentMemory</h1>
+            <p>四层闭环记忆系统 - REST API v0.3.0</p>
+        </header>
+        
+        <div class="main-layout">
+            <nav class="sidebar">
+                <div class="nav-item active" onclick="showTab('store')">📝 存储记忆</div>
+                <div class="nav-item" onclick="showTab('list')">📋 列出记忆</div>
+                <div class="nav-item" onclick="showTab('search')">🔍 搜索记忆</div>
+                <div class="nav-item" onclick="showTab('stats')">📊 统计信息</div>
+                <div class="nav-item" onclick="showTab('sync')">🔄 同步管理</div>
+            </nav>
+            
+            <main class="content">
+                <!-- Store Panel -->
+                <div id="panel-store" class="panel active">
+                    <h2 style="margin-bottom: 20px;">📝 存储新记忆</h2>
+                    <div class="form-group">
+                        <label class="form-label">记忆内容</label>
+                        <textarea id="store-content" class="form-textarea" placeholder="输入要记忆的内容..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">重要性评分</label>
+                        <div class="range-container">
+                            <input type="range" id="store-importance" class="range-slider" min="0" max="1" step="0.1" value="0.5">
+                            <span id="importance-value" class="range-value">0.5</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">分类路径</label>
+                        <input type="text" id="store-category" class="form-input" placeholder="如: 项目/石榴籽">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">标签 (逗号分隔)</label>
+                        <input type="text" id="store-tags" class="form-input" placeholder="如: 重要, 测试">
+                    </div>
+                    <button id="btn-store" class="btn" onclick="storeMemory()">💾 存储记忆</button>
+                    <div id="store-result" class="result-box"></div>
+                </div>
+                
+                <!-- List Panel -->
+                <div id="panel-list" class="panel">
+                    <h2 style="margin-bottom: 20px;">📋 记忆列表</h2>
+                    <div class="form-group">
+                        <label class="form-label">分类筛选</label>
+                        <input type="text" id="list-category" class="form-input" placeholder="留空显示所有">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">数量限制</label>
+                        <input type="number" id="list-limit" class="form-input" value="20" min="1" max="100" style="max-width: 150px;">
+                    </div>
+                    <button id="btn-list" class="btn" onclick="listMemories()">📋 获取列表</button>
+                    <div id="list-result" class="result-box"></div>
+                    <div id="memory-list" style="margin-top: 20px;"></div>
+                </div>
+                
+                <!-- Search Panel -->
+                <div id="panel-search" class="panel">
+                    <h2 style="margin-bottom: 20px;">🔍 语义搜索</h2>
+                    <div class="form-group">
+                        <label class="form-label">搜索关键词</label>
+                        <input type="text" id="search-query" class="form-input" placeholder="输入搜索内容...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">返回数量</label>
+                        <input type="number" id="search-limit" class="form-input" value="5" min="1" max="50" style="max-width: 150px;">
+                    </div>
+                    <button id="btn-search" class="btn" onclick="searchMemories()">🔍 搜索</button>
+                    <div id="search-result" class="result-box"></div>
+                    <div id="search-list" style="margin-top: 20px;"></div>
+                </div>
+                
+                <!-- Stats Panel -->
+                <div id="panel-stats" class="panel">
+                    <h2 style="margin-bottom: 20px;">📊 统计信息</h2>
+                    <div id="stats-grid" class="stats-grid"></div>
+                    <button class="btn" onclick="loadStats()">🔄 刷新</button>
+                    <div id="stats-result" class="result-box" style="margin-top: 20px;"></div>
+                </div>
+                
+                <!-- Sync Panel -->
+                <div id="panel-sync" class="panel">
+                    <h2 style="margin-bottom: 20px;">🔄 同步管理</h2>
+                    <div class="flex-inline">
+                        <button id="btn-sync" class="btn" onclick="runSync()">⚡ 触发全量同步</button>
+                        <button id="btn-compress" class="btn" onclick="runCompress()">📦 压缩摘要</button>
+                    </div>
+                    <div id="sync-result" class="result-box" style="margin-top: 20px;"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <script>
+        const API = '';
+        
+        function showTab(name) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById('panel-' + name).classList.add('active');
+            event.target.classList.add('active');
+            if (name === 'stats') loadStats();
+        }
+        
+        document.getElementById('store-importance').addEventListener('input', function() {
+            document.getElementById('importance-value').textContent = this.value;
+        });
+        
+        async function storeMemory() {
+            const content = document.getElementById('store-content').value.trim();
+            if (!content) { alert('请输入记忆内容'); return; }
+            
+            const importance = parseFloat(document.getElementById('store-importance').value);
+            const category_path = document.getElementById('store-category').value.trim();
+            const tagsInput = document.getElementById('store-tags').value.trim();
+            const tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
+            
+            const btn = document.getElementById('btn-store');
+            btn.disabled = true;
+            btn.textContent = '⏳ 存储中...';
+            
+            try {
+                const res = await fetch(API + '/api/memories', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ content, importance, category_path, tags })
+                });
+                const data = await res.json();
+                
+                const box = document.getElementById('store-result');
+                box.classList.add('show');
+                box.textContent = JSON.stringify(data, null, 2);
+                
+                if (data.status === 'ok') {
+                    document.getElementById('store-content').value = '';
+                    document.getElementById('store-tags').value = '';
+                }
+            } catch (e) {
+                document.getElementById('store-result').classList.add('show');
+                document.getElementById('store-result').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '💾 存储记忆';
+            }
+        }
+        
+        async function listMemories() {
+            const category = document.getElementById('list-category').value.trim();
+            const limit = parseInt(document.getElementById('list-limit').value) || 20;
+            
+            const btn = document.getElementById('btn-list');
+            btn.disabled = true;
+            
+            try {
+                const url = API + '/api/memories?limit=' + limit + (category ? '&category=' + encodeURIComponent(category) : '');
+                const res = await fetch(url);
+                const data = await res.json();
+                
+                const box = document.getElementById('list-result');
+                box.classList.add('show');
+                box.textContent = JSON.stringify(data, null, 2);
+                
+                const list = document.getElementById('memory-list');
+                if (data.memories) {
+                    list.innerHTML = data.memories.map(m => `
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-score">重要性: ${m.importance}</span>
+                                <span style="color: #666; font-size: 12px;">${m.id}</span>
+                            </div>
+                            <div class="card-content">${escapeHtml(m.content)}</div>
+                            <div class="card-meta">
+                                ${m.tags.map(t => '<span class="card-tag">' + escapeHtml(t) + '</span>').join('')}
+                            </div>
+                        </div>
+                    `).join('') || '<p style="color: #666;">暂无记忆</p>';
+                }
+            } catch (e) {
+                document.getElementById('list-result').classList.add('show');
+                document.getElementById('list-result').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        async function searchMemories() {
+            const query = document.getElementById('search-query').value.trim();
+            if (!query) { alert('请输入搜索内容'); return; }
+            
+            const limit = parseInt(document.getElementById('search-limit').value) || 5;
+            
+            const btn = document.getElementById('btn-search');
+            btn.disabled = true;
+            
+            try {
+                const url = API + '/api/search?q=' + encodeURIComponent(query) + '&limit=' + limit;
+                const res = await fetch(url);
+                const data = await res.json();
+                
+                const box = document.getElementById('search-result');
+                box.classList.add('show');
+                box.textContent = JSON.stringify(data, null, 2);
+                
+                const list = document.getElementById('search-list');
+                if (data.results) {
+                    list.innerHTML = data.results.map(m => `
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="card-score">匹配度: ${(m.score * 100).toFixed(1)}%</span>
+                            </div>
+                            <div class="card-content">${escapeHtml(m.content)}</div>
+                            <div class="card-meta">
+                                ${m.tags.map(t => '<span class="card-tag">' + escapeHtml(t) + '</span>').join('')}
+                            </div>
+                        </div>
+                    `).join('') || '<p style="color: #666;">未找到匹配记忆</p>';
+                }
+            } catch (e) {
+                document.getElementById('search-result').classList.add('show');
+                document.getElementById('search-result').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        async function loadStats() {
+            try {
+                const res = await fetch(API + '/api/stats');
+                const data = await res.json();
+                
+                const grid = document.getElementById('stats-grid');
+                const stats = data.stats || {};
+                grid.innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.vector?.total || 0}</div>
+                        <div class="stat-label">总记忆数</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.graph?.entities || 0}</div>
+                        <div class="stat-label">实体数量</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.vector?.active || 0}</div>
+                        <div class="stat-label">活跃记忆</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.vector?.archived || 0}</div>
+                        <div class="stat-label">已归档</div>
+                    </div>
+                `;
+                
+                document.getElementById('stats-result').classList.add('show');
+                document.getElementById('stats-result').textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+        
+        async function runSync() {
+            const btn = document.getElementById('btn-sync');
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch(API + '/api/sync', { method: 'POST' });
+                const data = await res.json();
+                
+                const box = document.getElementById('sync-result');
+                box.classList.add('show');
+                box.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                document.getElementById('sync-result').classList.add('show');
+                document.getElementById('sync-result').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        async function runCompress() {
+            const btn = document.getElementById('btn-compress');
+            btn.disabled = true;
+            
+            try {
+                // 示例：用最近添加的记忆ID进行压缩测试
+                const res = await fetch(API + '/api/memories?limit=3');
+                const data = await res.json();
+                const ids = (data.memories || []).map(m => m.id);
+                
+                if (ids.length === 0) {
+                    document.getElementById('sync-result').classList.add('show');
+                    document.getElementById('sync-result').textContent = '无记忆可压缩';
+                    return;
+                }
+                
+                const compressRes = await fetch(API + '/api/compress', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ids: ids.slice(0, 3) })
+                });
+                const compressData = await compressRes.json();
+                
+                const box = document.getElementById('sync-result');
+                box.classList.add('show');
+                box.textContent = JSON.stringify(compressData, null, 2);
+            } catch (e) {
+                document.getElementById('sync-result').classList.add('show');
+                document.getElementById('sync-result').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Load stats on init
+        loadStats();
+    </script>
+</body>
+</html>
