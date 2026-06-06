@@ -1,6 +1,6 @@
 # 长期记忆
 
-_最后更新: 2026-05-27 20:38_
+_最后更新: 2026-06-07 00:33_
 
 ---
 
@@ -19,8 +19,6 @@ _最后更新: 2026-05-27 20:38_
 ## 决策 (Decisions)
 
 
-- [2026-05-27] [LEARNING] 测试：agentmemory API 集成测试 _(importance: 0.9)_
+- [2026-06-07] [GENERAL] 内容 _(importance: 0.9)_
 
-- [2026-05-27] [LEARNING] 测试：agentmemory API 集成测试 _(importance: 0.9)_
-
-- [2026-05-27] [LEARNING] 测试：agentmemory API 集成测试 _(importance: 0.9)_
+- [2026-06-07] [GENERAL] 内容 _(importance: 0.9)_
