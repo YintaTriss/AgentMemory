@@ -539,9 +539,11 @@ _本基线文档由 QA Team 维护，更新时同步更新本文件。_
 
 ---
 
-## v0.3.0 性能基线（2026-06-07）
+## 10. v0.3.0 性能基线（2026-06-07）
 
-### 核心操作性能基线
+基于 `VERIFICATION_REPORT.md` 的 E2E 验证数据：
+
+### 10.1 核心操作性能基线
 
 | Operation | Time (ms) | Limit | Status |
 |-----------|----------|-------|--------|
@@ -549,15 +551,47 @@ _本基线文档由 QA Team 维护，更新时同步更新本文件。_
 | search | 0.27 | 50ms | ✓ PASS |
 | list | 0.45 | 50ms | ✓ PASS |
 
-### 安全测试 P0 状态
+### 10.2 v0.3.0 已验证功能
 
-| 测试 | 状态 |
-|------|------|
-| test_api_key_validation | SKIPPED (embedder不在src) |
-| test_hmac_signature_sign_verify | PASS |
-| test_hmac_signature_verify_on_change | PASS |
-| test_file_lock_concurrency | PASS |
-| test_async_concurrent_add | PASS |
-| test_write_non_blocking | PASS |
-| test_prompt_injection_keywords | PASS |
+| 功能 | 状态 | 备注 |
+|------|------|------|
+| L4 Files (Markdown) | ✓ PASS | md=True |
+| L3 Vector Store | ✓ PASS | engine: simple-json |
+| Embedder (Hash-based) | ✓ PASS | 无需 API Key |
+| Search (Keyword) | ✓ PASS | 非语义搜索 |
+| Category Classification | ✓ PASS | 自动分类 |
+| Delete | ✓ PASS | 完整删除 |
 
+### 10.3 v0.3.0 已移除功能
+
+| 功能 | 状态 | 备注 |
+|------|------|------|
+| L2 Graph Store | ✗ REMOVED | v0.3 重构中移除 |
+
+### 10.4 测试套件状态
+
+| 测试文件 | 通过 | 跳过 | 状态 |
+|---------|-----|-----|------|
+| tests/test_security_p0.py | 4 | 3 | 新增 P0 安全测试 |
+| tests/unit/test_*.py | ~383 | ~60 | 核心单元测试 |
+| tests/integration/ | - | - | 待验证 |
+
+---
+
+## 11. 安全测试 P0（新增）
+
+tests/test_security_p0.py 包含以下测试：
+
+| 测试 | 状态 | 描述 |
+|------|------|------|
+| test_api_key_validation_no_key | SKIPPED | embedder 模块不在 src/ |
+| test_prompt_injection_keywords | SKIPPED | FactEntry 无 trust_level |
+| test_injection_in_content_stored | PASS | 注入内容可存储 |
+| test_file_lock_concurrency | PASS | 10 并发写入成功 |
+| test_async_concurrent_add | PASS | 异步并发写入 |
+| test_hmac_signature_verify_on_change | SKIPPED | MemoryMD 无 verify_folder |
+| test_write_non_blocking | PASS | 写入 < 50ms |
+
+---
+
+_本基线文档更新于 2026-06-07，添加 v0.3.0 性能基线和安全测试。_

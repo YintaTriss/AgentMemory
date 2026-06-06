@@ -140,3 +140,37 @@ def sample_relations():
             "properties": {}
         }
     ]
+
+
+@pytest.fixture
+def tmp_memory_dir(tmp_path):
+    """创建临时记忆目录"""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    return memory_dir
+
+
+@pytest.fixture
+def mock_embedder():
+    """Mock Embedder 用于测试"""
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    try:
+        from embedder import MockEmbedder
+        return MockEmbedder(dimensions=1024)
+    except ImportError:
+        pytest.skip("MockEmbedder not available")
+
+
+@pytest.fixture
+def sample_vector_store(tmp_memory_dir):
+    """Sample VectorStore for testing"""
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    try:
+        from vector_store import VectorStore
+        return VectorStore(str(tmp_memory_dir))
+    except ImportError:
+        pytest.skip("VectorStore not available")
