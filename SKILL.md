@@ -1,14 +1,14 @@
 ---
 name: agentmemory
-version: 1.0.0
+version: 1.0.1
 family: symphony
 role: memory-center
-description: 交响乐技能家族 - 顶尖记忆系统，融合 Hermes + Mem0 优点，四层闭环记忆架构
+description: 交响乐技能家族 - 双轨图书馆记忆系统，零外部依赖，热插拔
 ---
 
 # agentmemory 顶尖记忆技能
 
-> 交响乐技能家族成员 | 融合 Hermes 记忆机制 + Mem0 混合检索 + 四层闭环架构
+> 交响乐技能家族成员 | 双轨检索 + 图书馆分类 + 零依赖
 
 ## 一键启用
 
@@ -17,121 +17,107 @@ cd skills/agentmemory
 pip install -e .
 ```
 
-然后直接使用 CLI 命令，或在 Python 中导入使用。
-
----
-
-## CLI 命令（开箱即用）
+## CLI 命令
 
 ```bash
-# 查看各层状态
-agentmemory layer-status
+# 存储记忆（自动双轨）
+agentmemory store "用户参加了石榴籽省赛答辩" --category "Project/Shiliuzi/Competition" --importance 0.9
 
-# 存储记忆
-agentmemory store "用户参加了石榴籽省赛" --importance 0.8
+# 查询记忆（双轨：语义 + 分类）
+agentmemory query "石榴籽项目进展" --limit 5
 
-# 查询记忆（混合检索：BM25 + 重要性）
-agentmemory query "石榴籽项目" --limit 5
-
-# 预取相关记忆（后台缓存）
-agentmemory prefetch "优优的项目"
+# 按分类浏览
+agentmemory browse Project/Shiliuzi
 
 # 遗忘指定记忆
 agentmemory forget <memory_id>
 
-# 对话轮次同步（LLM 自动事实提取）
-agentmemory sync-turn "用户说省赛结果出了" "助手回复恭喜"
-
-# 会话结束总结
-agentmemory session-end --summary "讨论了石榴籽项目进展"
-
-# 遗忘引擎检查（心跳触发）
-agentmemory decay-check
-
-# 记忆系统统计
+# 统计
 agentmemory stats
-
-# 通用动作接口（兼容 AgentSymphony）
-agentmemory execute store '{"text":"内容","importance":0.8}'
 ```
 
 ---
 
-## 四层闭环架构
+## 双轨 + 图书馆架构
+
+**设计哲学：记忆如图书馆。书籍本身不会变，但目录系统让查找变得精确。**
+
+同一份记忆同时存在于两条轨道，永远双轨并存，不存在"相变"切换。
 
 ```
-L1: LCM 压缩层（对话 → 关键事实）
-    └── LLM 提取事实，不存原始对话
-
-L2: Graph 图谱层（事实 → 实体关系）
-    └── 实体（人名/项目）+ 关系 + 属性
-
-L3: Vector 向量层（混合检索）
-    └── BM25(60%) + 重要性(30%) + 访问频率(10%)
-
-L4: Files 持久化层（记忆归档）
-    └── MEMORY.md + 每日日记 memory/
-
-遗忘引擎：评分 = 访问频率×0.3 + 重要性×0.3 + 时效性×0.4
+同一份记忆：
+├─ 图书馆分类轨（.md 本体 + meta.json 元数据）→ 精确查找
+└─ Embedding 向量轨（vec.json）→ 语义搜索
 ```
+
+**层级分类（最多 4 层）：**
+```
+Project/Shiliuzi/Corpus/NLLB-Training
+Project/Shiliuzi/Competition/Provincial
+AI/Agent/记忆系统/VCP
+```
+
+**检索方式：**
+| 轨 | 方式 | 场景 |
+|----|------|------|
+| 轨一 | Embedding 向量 | 语义模糊匹配 |
+| 轨二 | 图书馆分类 | 精确查找 |
 
 ---
 
 ## Python API
 
 ```python
-from skills.agentmemory.src.memory_manager import MemoryHermes
+from agent_memory import MemoryManager
 
-mh = MemoryHermes()
+mm = MemoryManager()
 
-# 存储记忆
-memory_id = await mh.store(
-    "用户参加了石榴籽省赛",
-    metadata={"source": "conversation"},
-    importance=0.8
+# 存储（双轨写入）
+mem_id = mm.add(
+    content="NLLB 训练成功启动",
+    category="Project/Shiliuzi/Training",
+    importance=0.9
 )
 
-# 查询记忆
-results = await mh.query("石榴籽", limit=5)
+# 查询（双轨检索）
+results = mm.query("NLLB 训练")
 for r in results:
     print(f"[{r['score']:.2f}] {r['content']}")
 
-# 对话轮次同步
-facts = await mh.sync_turn(
-    "用户说省赛结果出了",
-    "助手回复恭喜"
-)
-
-# 遗忘
-await mh.forget(memory_id)
-
-# 统计
-stats = mh.get_stats()
+# 按分类浏览
+items = mm.browse("Project/Shiliuzi")
 ```
 
 ---
 
 ## 配置
 
-环境变量（可选）:
-- `BAILIAN_API_KEY` - 百炼 API Key（L1 LLM 压缩用）
-- `DASHSCOPE_API_KEY` - 通义 API Key（向量嵌入用）
+环境变量（可选）：
+- `AGENTMEMORY_EMBEDDER` - embedder 类型：`local`（默认）或 `api`
+- `AGENTMEMORY_EMBEDDER_API_KEY` - DashScope API Key（API 模式）
+- `AGENTMEMORY_VECTOR_DB` - 向量库：`lancedb`（默认）或 `json`
 
-无 API Key 时：L1/L3 使用备选方案（BM25 纯文本检索），L2/L4 完全离线可用。
+默认模式（local）零外部依赖，文件夹即可运行。
 
 ---
 
 ## 技能调用时机
 
 当需要以下操作时，加载此技能：
-- `memory.store` - 存储重要事实
-- `memory.query` - 检索相关记忆
-- `memory.sync-turn` - 对话后提取事实
-- `memory.session-end` - 会话结束总结
-- `memory.prefetch` - 预取相关记忆
-- `memory.decay-check` - 遗忘引擎检查
-- `memory.stats` - 查看记忆状态
+- `memory.store` - 存储记忆
+- `memory.query` - 语义 + 分类双轨检索
+- `memory.browse` - 按分类浏览
+- `memory.forget` - 遗忘
+- `memory.stats` - 查看状态
 
 ---
 
-_ Memory Hermes · 融合 Hermes + Mem0 顶尖记忆技能_
+## 架构版本
+
+- **v0.3**：当前版本，双轨 + 图书馆架构
+- **v0.2**：已废弃，相变机制不需要
+- **v0.1**：已废弃，过度抽象（四层 L2 Graph-DB 不存在）
+
+---
+
+_AgentMemory v0.3 · 双轨图书馆记忆系统_

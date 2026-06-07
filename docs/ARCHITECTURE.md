@@ -1,4 +1,13 @@
-# AgentMemory v2.0 架构设计文档
+# AgentMemory v2.0 架构设计文档 ⚠️ 已废弃
+
+> **⚠️ 已废弃 - 请参考最新文档**
+> - 当前版本：`ARCHITECTURE-v0.3.md` 或 `docs/ARCHITECTURE-IMPL.md`
+> - v2.0 描述的四层架构（L1/L2/L3/L4）已被 v0.3 双轨+图书馆架构替代
+> - L2 Graph-DB 从未实现，已删除
+
+---
+
+# AgentMemory v2.0 架构设计文档（历史版本）
 
 > **作者**：架构师（architect）
 > **任务 ID**：`ae1abe36-72d7-4e56-8d97-01d5bf8141be`
