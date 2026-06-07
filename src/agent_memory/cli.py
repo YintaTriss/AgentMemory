@@ -15,7 +15,9 @@ from typing import Optional
 from . import __version__
 from .l4_files import L4FilesStore
 from .library import LibraryClassifier, TOP_LEVEL_CATEGORIES
+from .l3_lancedb import L3LanceDBStore
 from .integrity import sign_file, verify_folder, sign_all_memories
+from .embedder import get_embedder
 
 
 # 默认工作目录（memory 存储位置）
@@ -48,6 +50,12 @@ def _build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("query", help="搜索查询")
     search_parser.add_argument("--limit", type=int, default=5, help="返回数量限制")
     search_parser.add_argument("--category", help="限定分类路径")
+    search_parser.add_argument(
+        "--mode",
+        choices=["vector", "bm25", "hybrid"],
+        default="vector",
+        help="搜索模式: vector=语义, bm25=关键词, hybrid=混合 (default: vector)",
+    )
 
     # list 命令
     list_parser = subparsers.add_parser("list", help="列出记忆")
@@ -79,6 +87,20 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser("verify", help="验证记忆目录的 HMAC 签名")
     verify_parser.add_argument("dir", help="记忆存储目录")
     verify_parser.add_argument("--key", required=True, help="签名密钥（字符串）")
+
+    # reembed 命令
+    reembed_parser = subparsers.add_parser("reembed", help="重新向量化所有记忆")
+    reembed_parser.add_argument(
+        "--embedder",
+        choices=["hash", "dashscope"],
+        default="hash",
+        help="使用的 Embedder 类型 (default: hash)",
+    )
+
+    # serve 命令
+    serve_parser = subparsers.add_parser("serve", help="启动 Web API 服务器")
+    serve_parser.add_argument("--port", type=int, default=8765, help="监听端口 (default: 8765)")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="监听地址 (default: 0.0.0.0)")
 
     return parser
 
@@ -157,61 +179,63 @@ async def cmd_search(
     query: str,
     limit: int,
     category: Optional[str],
+    mode: str,
     base_dir: str,
-    as_json: bool
+    as_json: bool,
 ) -> None:
-    """处理 search 命令"""
+    """处理 search 命令 — 支持 vector / bm25 / hybrid 三种模式"""
+    import os
+    from .l3_lancedb import L3LanceDBStore
+    from .embedder import get_embedder
+
     store = L4FilesStore(base_dir=base_dir)
+    embedder = get_embedder()
+    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
+    l3_store = L3LanceDBStore(db_path=db_path)
 
-    # 获取所有记忆
-    all_ids = await store.list_all()
-
-    if not all_ids:
-        result = {"success": True, "results": [], "message": "No memories found"}
-        _print_result(result, as_json)
-        return
-
-    # 简单关键词匹配搜索（fallback 到 L3 未实现时）
-    results = []
-    for mem_id in all_ids:
-        meta = await store.get_meta(mem_id)
-        if not meta:
-            continue
-
-        # 分类过滤
-        if category and not meta.get("category_path", "").startswith(category):
-            continue
-
-        content = await store.load(mem_id)
-        if not content:
-            continue
-
-        # 简单包含匹配
-        query_lower = query.lower()
-        content_lower = content.lower()
-
-        # 计算匹配分数
-        score = 0
-        if query_lower in content_lower:
-            score = content_lower.count(query_lower)
-        elif any(qw in content_lower for qw in query_lower.split()):
-            score = 1
-
-        if score > 0:
-            results.append({
-                "id": mem_id,
-                "content": content[:100] + ("..." if len(content) > 100 else ""),
-                "full_content": content,
-                "score": score,
-                "meta": meta,
-            })
-
-    # 按分数排序
-    results.sort(key=lambda x: x["score"], reverse=True)
-    results = results[:limit]
+    if mode == "bm25":
+        raw = l3_store.search_bm25(query, top_k=limit)
+        results = [
+            {
+                "id": r["id"],
+                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
+                "score": r["bm25_score"],
+                "category_path": r.get("category_path", ""),
+            }
+            for r in raw
+        ]
+    elif mode == "hybrid":
+        query_vector = embedder.embed(query)
+        raw = l3_store.search_hybrid(query_vector, query, top_k=limit)
+        results = [
+            {
+                "id": r["id"],
+                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
+                "score": r["score"],
+                "vector_score": r.get("vector_score", 0),
+                "bm25_score": r.get("bm25_score", 0),
+                "category_path": r.get("category_path", ""),
+            }
+            for r in raw
+        ]
+    else:
+        # vector mode
+        query_vector = embedder.embed(query)
+        filter_expr = f"category_path = '{category}'" if category else None
+        raw = l3_store.search(query_vector, top_k=limit, filter_expr=filter_expr)
+        results = [
+            {
+                "id": r["id"],
+                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
+                "score": r["score"],
+                "category_path": r.get("category_path", ""),
+            }
+            for r in raw
+        ]
 
     result = {
         "success": True,
+        "mode": mode,
         "query": query,
         "count": len(results),
         "results": results,
@@ -219,10 +243,10 @@ async def cmd_search(
 
     if not as_json:
         if results:
-            lines = [f"Found {len(results)} matching memories:\n"]
+            lines = [f"Found {len(results)} memories (mode={mode}):\n"]
             for r in results:
-                lines.append(f"  [{r['id']}] (score: {r['score']})")
-                lines.append(f"    {r['content'][:80]}...")
+                lines.append(f"  [{r['id']}] score={r['score']:.4f}")
+                lines.append(f"    {r['content'][:80]}")
                 lines.append("")
             result["message"] = "\n".join(lines)
         else:
@@ -437,6 +461,86 @@ def cmd_verify(dir_path: str, key: str, as_json: bool) -> None:
         _print_result(result, as_json)
 
 
+async def cmd_reembed(
+    embedder_type: str,
+    base_dir: str,
+    as_json: bool,
+) -> None:
+    """处理 reembed 命令 — 重新向量化所有记忆"""
+    import os
+    os.environ["AGENT_MEMORY_EMBEDDER"] = embedder_type
+
+    store = L4FilesStore(base_dir=base_dir)
+    embedder = get_embedder()
+
+    # L3 store 路径
+    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
+    l3_store = L3LanceDBStore(db_path=db_path)
+
+    all_ids = await store.list_all()
+    if not all_ids:
+        result = {"success": True, "message": "No memories to reembed", "count": 0}
+        _print_result(result, as_json)
+        return
+
+    updated = 0
+    errors = 0
+    for mem_id in all_ids:
+        try:
+            content = await store.load(mem_id)
+            if not content:
+                continue
+            meta = await store.get_meta(mem_id) or {}
+            vec = embedder.embed(content)
+            l3_store.upsert(
+                id=mem_id,
+                content=content,
+                vector=vec,
+                metadata=meta,
+                importance=meta.get("importance", 0.5),
+                category_path=meta.get("category_path", "general"),
+                created_at=meta.get("created_at"),
+            )
+            updated += 1
+            if not as_json:
+                print(f"  [{updated}/{len(all_ids)}] reembedded: {mem_id}")
+        except Exception as e:
+            errors += 1
+            if not as_json:
+                print(f"  [ERROR] {mem_id}: {e}")
+
+    result = {
+        "success": True,
+        "count": updated,
+        "errors": errors,
+        "embedder": embedder_type,
+        "message": f"OK: reembedded {updated} memories ({errors} errors) with {embedder_type}",
+    }
+    _print_result(result, as_json)
+
+
+def cmd_serve(port: int, host: str, base_dir: str, as_json: bool) -> None:
+    """处理 serve 命令 — 启动 FastAPI Web 服务器"""
+    try:
+        from .web import create_app
+        import uvicorn
+    except ImportError as e:
+        result = {
+            "success": False,
+            "message": f"FastAPI not installed: {e}. Run: pip install agentmemory[web]",
+        }
+        _print_result(result, as_json)
+        return
+
+    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
+    app = create_app(base_dir=base_dir, db_path=db_path)
+
+    if as_json:
+        print(json.dumps({"success": True, "message": f"Starting server on {host}:{port}"}))
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def main() -> int:
     """CLI 主入口"""
     parser = _build_parser()
@@ -456,6 +560,22 @@ def main() -> int:
         cmd_verify(kwargs["dir"], kwargs["key"], as_json)
         return 0
 
+    if command == "reembed":
+        return asyncio.run(cmd_reembed(
+            embedder_type=kwargs["embedder"],
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "serve":
+        cmd_serve(
+            port=kwargs["port"],
+            host=kwargs["host"],
+            base_dir=base_dir,
+            as_json=as_json,
+        )
+        return 0
+
     # All other commands are async
     if command == "add":
         return asyncio.run(cmd_add(
@@ -473,6 +593,7 @@ def main() -> int:
             query=kwargs["query"],
             limit=kwargs.get("limit", 5),
             category=kwargs.get("category"),
+            mode=kwargs.get("mode", "vector"),
             base_dir=base_dir,
             as_json=as_json,
         )) or 0

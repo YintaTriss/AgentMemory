@@ -1,12 +1,16 @@
 """
 AgentMemory v0.3 - L3 LanceDB Vector Store Layer
 
-Provides semantic vector search using LanceDB with JSON fallback.
+Provides semantic vector search using LanceDB with JSON fallback,
+and optional BM25 hybrid retrieval.
 """
 
 from __future__ import annotations
 
 import json
+import math
+import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -19,6 +23,94 @@ try:
     LANCEDB_AVAILABLE = True
 except ImportError:
     LANCEDB_AVAILABLE = False
+
+
+# ============================================================================
+# BM25 Indexer — pure Python, zero extra dependencies
+# ============================================================================
+
+class BM25Indexer:
+    """Pure-Python BM25 indexer for keyword search.
+
+    Scoring formula (Lucene BM25):
+        score = IDF(t) * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * |d| / avgdl))
+
+    Attributes:
+        k1: Term frequency saturation parameter (default 1.2).
+        b:  Document length normalization (default 0.75).
+    """
+
+    def __init__(self, k1: float = 1.2, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self._docs: List[str] = []        # original texts
+        self._doc_tokens: List[List[str]] = []  # tokenized
+        self._doc_len: List[int] = []     # token counts
+        self._avgdl: float = 0.0
+        self._idf: Dict[str, float] = {}  # term -> IDF
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Split text into lowercase tokens ( alphanumeric runs)."""
+        return re.findall(r"[a-z0-9]+", text.lower())
+
+    def _compute_idf(self, term_doc_freq: Counter) -> Dict[str, float]:
+        """Compute IDF for each term: log((N - n_t + 0.5) / (n_t + 0.5) + 1)."""
+        N = len(self._docs)
+        idf = {}
+        for term, df in term_doc_freq.items():
+            # BM25 IDF formula (Lucene variant)
+            idf[term] = math.log((N - df + 0.5) / (df + 0.5) + 1.0)
+        return idf
+
+    def index(self, texts: List[str]) -> None:
+        """Build the BM25 index from a list of documents."""
+        self._docs = texts
+        self._doc_tokens = [self._tokenize(t) for t in texts]
+        self._doc_len = [len(toks) for toks in self._doc_tokens]
+        self._avgdl = sum(self._doc_len) / max(len(self._doc_len), 1)
+
+        # Document frequency for each term
+        term_doc_freq: Counter = Counter()
+        for tokens in self._doc_tokens:
+            for term in set(tokens):
+                term_doc_freq[term] += 1
+
+        self._idf = self._compute_idf(term_doc_freq)
+
+    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Score all documents against *query* and return top-k results.
+
+        Returns list of dicts with keys: doc_index, doc_text, bm25_score.
+        """
+        if not self._docs or not self._idf:
+            return []
+
+        query_tokens = self._tokenize(query)
+        scores: List[float] = [0.0] * len(self._docs)
+
+        for term in query_tokens:
+            if term not in self._idf:
+                continue
+            idf = self._idf[term]
+            for i, tokens in enumerate(self._doc_tokens):
+                tf = tokens.count(term)
+                if tf == 0:
+                    continue
+                doc_len_norm = self.k1 * (1.0 - self.b + self.b * self._doc_len[i] / max(self._avgdl, 1))
+                score = idf * (tf * (self.k1 + 1.0)) / (tf + doc_len_norm)
+                scores[i] += score
+
+        # Pair (index, score) and sort descending
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        results = []
+        for idx, score in ranked[:top_k]:
+            if score > 0:
+                results.append({
+                    "doc_index": idx,
+                    "doc_text": self._docs[idx],
+                    "bm25_score": round(score, 6),
+                })
+        return results
 
 
 class L3LanceDBStore:
@@ -261,3 +353,104 @@ class L3LanceDBStore:
             return self._table.to_list()
         except Exception:
             return list(self._fallback_data.values())
+
+    def search_bm25(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Pure-BM25 keyword search across all stored content.
+
+        Falls back to an empty list if no documents are indexed.
+        """
+        all_records = self.get_all()
+        if not all_records:
+            return []
+
+        texts = [r.get("content", "") or "" for r in all_records]
+        indexer = BM25Indexer()
+        indexer.index(texts)
+        bm25_results = indexer.search(query, top_k=top_k)
+
+        # Map back to full record fields
+        results = []
+        for bm in bm25_results:
+            rec = all_records[bm["doc_index"]]
+            metadata = rec.get("metadata", "{}")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            results.append({
+                "id": rec.get("id", ""),
+                "content": rec.get("content", ""),
+                "score": bm["bm25_score"],
+                "bm25_score": bm["bm25_score"],
+                "metadata": metadata,
+                "importance": rec.get("importance", 0.5),
+                "category_path": rec.get("category_path", ""),
+                "created_at": rec.get("created_at", ""),
+            })
+        return results
+
+    def search_hybrid(
+        self,
+        query_vector: List[float],
+        query_text: str,
+        top_k: int = 5,
+        alpha: float = 0.7,
+    ) -> List[Dict[str, Any]]:
+        """Hybrid search: combine vector similarity and BM25 scores.
+
+        Args:
+            query_vector: Pre-computed embedding of the query.
+            query_text: Raw query text for BM25.
+            top_k: Number of results to return.
+            alpha: Vector weight (0-1). BM25 weight = 1-alpha.
+                Default 0.7 —偏向语义。
+        """
+        vec_results = self.search(query_vector, top_k=top_k * 2)
+        bm25_results = self.search_bm25(query_text, top_k=top_k * 2)
+
+        # Normalize vector scores to [0,1] via max
+        if vec_results:
+            max_vec = max(r.get("score", 0.0) for r in vec_results)
+        else:
+            max_vec = 1.0
+        if bm25_results:
+            max_bm = max(r.get("bm25_score", 0.0) for r in bm25_results)
+        else:
+            max_bm = 1.0
+
+        # Build score maps
+        vec_map = {r["id"]: r.get("score", 0.0) / max_vec for r in vec_results}
+        bm_map = {r["id"]: r.get("bm25_score", 0.0) / max_bm for r in bm25_results}
+
+        # Union of all IDs
+        all_ids = set(vec_map) | set(bm_map)
+        hybrid_scores = []
+        for mid in all_ids:
+            vs = vec_map.get(mid, 0.0)
+            bs = bm_map.get(mid, 0.0)
+            combined = alpha * vs + (1.0 - alpha) * bs
+            hybrid_scores.append((mid, combined))
+
+        hybrid_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Build result list preserving full record data
+        id_to_vec = {r["id"]: r for r in vec_results}
+        id_to_bm = {r["id"]: r for r in bm25_results}
+        output = []
+        for mid, score in hybrid_scores[:top_k]:
+            vr = id_to_vec.get(mid, {})
+            br = id_to_bm.get(mid, {})
+            metadata = vr.get("metadata") or br.get("metadata", {})
+            output.append({
+                "id": mid,
+                "content": vr.get("content") or br.get("content", ""),
+                "score": round(score, 6),
+                "vector_score": vr.get("score", 0.0),
+                "bm25_score": br.get("bm25_score", 0.0),
+                "metadata": metadata,
+                "importance": vr.get("importance") or br.get("importance", 0.5),
+                "category_path": vr.get("category_path") or br.get("category_path", ""),
+                "created_at": vr.get("created_at") or br.get("created_at", ""),
+            })
+        return output
