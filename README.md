@@ -76,7 +76,7 @@
 | 层级 | 组件 | 职责 |
 |------|------|------|
 | **L4** | `L4FilesStore` | `.md` 内容 + `.meta.json` 元数据 + `.vec.json` 向量，文件系统持久化 |
-| **L3** | `L3LanceDBStore` | LanceDB 向量语义搜索，支持按 category_path / tags 过滤 |
+| **L3** | `L3LanceDBStore` | LanceDB 向量搜索（或 JSON fallback），支持按 category_path / tags 过滤 |
 | **L1** | `L1LCMCompressor` | 记忆压缩为摘要 + 实体列表，注入 AI prompt 时使用 |
 
 ### 双轨检索
@@ -178,24 +178,25 @@ pip install -e .
 **运行时依赖（pyproject.toml）：**
 
 ```
-httpx>=0.25.0    # HTTP 客户端
-aiofiles>=23.0.0 # 异步文件操作
-mcp>=1.0         # MCP 协议
-aiohttp>=3.9.0   # 异步 HTTP
-pydantic>=2.5    # 数据验证
-python-ulid>=1.0 # ID 生成
-fastapi>=0.110.0 # 可选：Web API
-uvicorn>=0.27.0  # 可选：ASGI 服务器
+httpx>=0.25.0    # DashScope API 异步调用
+aiofiles>=23.0.0 # 异步文件 IO
+pydantic>=2.5    # 数据验证（运行时必需）
 ```
 
-**portalocker**（文件锁）：已内置条件导入，未安装时自动回退到 msvcrt/fcntl。
+**可选依赖：**
+
+```
+pip install agentmemory[web]    # Web API 支持（fastapi + uvicorn + jinja2）
+pip install agentmemory[lancedb] # LanceDB 向量数据库
+pip install agentmemory[dev]     # 开发依赖（pytest 等）
+```
 
 **Embedding 可选：**
 
 | 包 | 功能 | 默认 |
 |----|------|------|
-| `lancedb` | 向量数据库 | HashEmbedder（纯 JSON 向量）|
-| `dashscope` | DashScope Embedding API | HashEmbedder 零依赖 |
+| `dashscope` | DashScope Embedding API | HashEmbedder（零依赖）|
+| `lancedb` | 向量数据库 | JSON fallback（零外部依赖）|
 
 
 ### Embedder 选择
