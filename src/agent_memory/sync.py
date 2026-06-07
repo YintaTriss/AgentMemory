@@ -29,22 +29,23 @@ class SyncManager:
             "记住", "决定", "重要", "完成", "项目", "计划",
         ]
     
-    def sync_one(self, memory_id: str) -> bool:
+    async def sync_one(self, memory_id: str) -> bool:
+        # P0-2 fix: l4.load() is async, must await
         try:
-            mem = self.l4.load(memory_id)
+            mem = await self.l4.load(memory_id)
             if not mem:
                 print(f"[Sync] Memory {memory_id} not found in L4")
                 return False
-            
+
             content = mem.get("content", "")
             meta = mem.get("meta")
-            
+
             if not content:
                 print(f"[Sync] Memory {memory_id} has no content")
                 return False
-            
+
             vector = self.embedder.embed(content)
-            
+
             # Handle meta as dict (from l4.load() returns dict with 'meta' key)
             if meta is None:
                 meta = {}
@@ -53,12 +54,19 @@ class SyncManager:
             importance = meta.get("importance", 0.5) if isinstance(meta, dict) else getattr(meta, "importance", 0.5)
             category_path = meta.get("category_path", "general") if isinstance(meta, dict) else getattr(meta, "category_path", getattr(meta, "category", "general"))
             created_at = meta.get("created_at", "") if isinstance(meta, dict) else getattr(meta, "created_at", "")
-            
+
             if not created_at:
                 created_at = datetime.now().isoformat()
 
             # P0-2: 注入检测，写入 L3 meta 前调用
             flagged, trust_score, matched_patterns = check_injection(content)
+
+            # P0-5 fix: enforce minimum trust threshold — reject if trust_score < 0.2
+            if trust_score < 0.2:
+                print(f"[Sync] REJECTED {memory_id}: trust_score={trust_score:.2f}, flagged_patterns={matched_patterns}")
+                return False
+            elif flagged:
+                print(f"[Sync] WARNING {memory_id}: trust_score={trust_score:.2f}, flagged_patterns={matched_patterns}")
 
             metadata = {
                 "source": source,
@@ -67,35 +75,37 @@ class SyncManager:
                 "trust_score": trust_score,
                 "flagged_patterns": matched_patterns,
             }
-            
+
             self.l3.upsert(
                 id=memory_id, content=content, vector=vector,
                 metadata=metadata, importance=importance,
                 category_path=category_path, created_at=created_at,
             )
-            
+
             self._write_vec_json(memory_id, vector)
             return True
-            
+
         except Exception as e:
             print(f"[Sync] Error syncing {memory_id}: {e}")
             return False
     
-    def sync_all(self) -> Dict[str, int]:
+    async def sync_all(self) -> Dict[str, int]:
+        # P0-2 fix: sync_one is now async
         memory_ids = self.l4.list()
         results = {"synced": 0, "failed": 0}
         for mid in memory_ids:
-            if self.sync_one(mid):
+            if await self.sync_one(mid):
                 results["synced"] += 1
             else:
                 results["failed"] += 1
         return results
     
-    def sync_by_category(self, category_path: str) -> int:
+    async def sync_by_category(self, category_path: str) -> int:
+        # P0-2 fix: l4.load() is async, must await
         memory_ids = self.l4.list()
         synced = 0
         for mid in memory_ids:
-            mem = self.l4.load(mid)
+            mem = await self.l4.load(mid)
             if mem:
                 meta = mem.get("meta")
                 if meta:
@@ -105,13 +115,14 @@ class SyncManager:
                     else:
                         cat = getattr(meta, "category_path", getattr(meta, "category", ""))
                     if cat == category_path:
-                        if self.sync_one(mid):
+                        if await self.sync_one(mid):
                             synced += 1
         return synced
     
-    def auto_sync_check(self, memory_id: str) -> bool:
+    async def auto_sync_check(self, memory_id: str) -> bool:
+        # P0-2 fix: l4.load() is async, must await
         try:
-            mem = self.l4.load(memory_id)
+            mem = await self.l4.load(memory_id)
             if not mem:
                 return False
             content = mem.get("content", "")

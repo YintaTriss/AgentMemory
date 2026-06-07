@@ -58,8 +58,8 @@ class MemoryManager:
         # Save to L4 (async)
         await self.l4.save(memory_id, content, meta_dict)
         
-        # Sync to L3 (this also writes vec.json)
-        self.sync.sync_one(memory_id)
+        # Sync to L3 (this also writes vec.json) — P0-2: must await since sync_one is now async
+        await self.sync.sync_one(memory_id)
         
         self._invalidate_cache()
         return memory_id
@@ -157,15 +157,17 @@ class MemoryManager:
         return stats
     
     def _generate_id(self, content: str) -> str:
-        import hashlib
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        # P0-3 fix: use timestamp+random so same content gets unique IDs
+        import time, secrets
+        return f"mem_{int(time.time()*1000):013x}_{secrets.token_hex(4)}"
     
     def _invalidate_cache(self) -> None:
         self._stats_cache = None
         self._stats_timestamp = None
     
-    def sync_all_memories(self) -> Dict[str, int]:
-        return self.sync.sync_all()
+    async def sync_all_memories(self) -> Dict[str, int]:
+        # P0-2 fix: sync_all is now async
+        return await self.sync.sync_all()
 
 
 def create_memory_manager(base_dir: str = "memory",

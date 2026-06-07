@@ -168,13 +168,9 @@ def _portalocker_lock(lock_path: Path, exclusive: bool = True, timeout: float = 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     if PORTALOCKER_AVAILABLE:
-        mode = portalocker.LOCK_EX_EXCLUSIVE if exclusive else portalocker.LOCK_SH_SHARED
-        locker = portalocker.FileLock(str(lock_path), timeout=timeout)
-        locker.lock(mode)
-        try:
+        flags = portalocker.LockFlags.EXCLUSIVE if exclusive else portalocker.LockFlags.SHARED
+        with portalocker.Lock(str(lock_path), timeout=timeout, flags=flags) as locker:
             yield locker
-        finally:
-            locker.unlock()
     else:
         # Fallback: no locking — note that this is unsafe under concurrent access.
         # Install portalocker to get proper cross-platform file locking:

@@ -209,7 +209,14 @@ class L3LanceDBStore:
                 self._save_fallback()
                 return True
             return False
-   
+        # P0-4 fix: main path must return bool, not None
+        try:
+            self._table.delete(f"id = '{id}'")
+            return True
+        except Exception as e:
+            print(f"[L3] Delete error: {e}")
+            return False
+
 
     def count(self) -> int:
         """Return the number of memories."""
