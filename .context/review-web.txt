@@ -1,0 +1,132 @@
+# web.py Bug Review — AgentMemory
+
+## Summary
+
+L4FilesStore has: list(), load(), load_existing(), save(), delete()
+L4FilesStore does NOT have: get_all_by_category(), get_meta(), list_all(), get_stats(), get_categories()
+DashScopeEmbedder.embed() is ASYNC; HashEmbedder.embed() is SYNC.
+category_path in filter_expr built via f-string is a SQL injection risk.
+
+---
+
+## Bug 1 — Missing method: get_all_by_category()
+- **Lines**: 101
+- **Severity**: P0
+- **Description**: `store.get_all_by_category(category_path)` is called in `list_memories()` but L4FilesStore does not have this method. Calling it will raise AttributeError at runtime.
+- **Fix**: Either implement `get_all_by_category()` in L4FilesStore, or fetch all records via `store.list()` and filter in Python. If keeping in Python:
+
+```python
+all_ids = await store.list()
+records = []
+for mid in all_ids:
+    content = await store.load(mid)
+    if content and (not category_path or store._category_for(mid) == category_path):
+        records.append({"id": mid, "content": content})
+```
+
+---
+
+## Bug 2 — Missing method: list_all()
+- **Lines**: 103–109
+- **Severity**: P0
+- **Description**: `store.list_all()` is called in the `else` branch of `list_memories()`. L4FilesStore does not have this method. Will raise AttributeError.
+- **Fix**: Replace with `store.list()` (which IS available). Then iterate and load content/meta in Python:
+
+```python
+all_ids = await store.list()
+records = []
+for mid in all_ids[:limit]:
+    content = await store.load(mid)
+    records.append({"id": mid, "content": content, "meta": None})  # meta requires new store method
+```
+
+---
+
+## Bug 3 — Missing method: get_meta()
+- **Lines**: 106, 124
+- **Severity**: P0
+- **Description**: `store.get_meta(mid)` and `store.get_meta(memory_id)` are called but L4FilesStore has no `get_meta()` method. Both call sites will raise AttributeError.
+- **Fix**: Implement `get_meta(memory_id)` in L4FilesStore, or load metadata from the stored file alongside content. The simplest fix is to load metadata from the JSON sidecar file that `save()` presumably writes.
+
+---
+
+## Bug 4 — Missing methods: get_stats() and get_categories()
+- **Lines**: 205–206
+- **Severity**: P0
+- **Description**: `store.get_stats()` and `store.get_categories()` are called in `get_stats()` but L4FilesStore does not have either method.
+- **Fix**: Implement both methods in L4FilesStore, or return placeholder values for L4-level stats (e.g., count from `list()`, size from file stats).
+
+---
+
+## Bug 5 — Unhandled async embedder: embed() not awaited (DashScopeEmbedder)
+- **Lines**: 80, 150, 166
+- **Severity**: P0
+- **Description**: `embedder.embed(...)` is called without `await`. DashScopeEmbedder.embed() is an async coroutine (returns `Awaitable[list[float]]`). Calling it without await returns a coroutine object, not the embedding vector. This will cause `TypeError` (e.g., "list[float] expected, got coroutine") or silent wrong data in downstream `l3_store.upsert()` / `l3_store.search()`.
+- **Fix**: Check embedder type before calling, or make embedder interface uniform:
+
+```python
+vec = await embedder.embed(req.content) if asyncio.iscoroutinefunction(embedder.embed) else embedder.embed(req.content)
+```
+
+Or always make the embedder wrapper async and await it consistently.
+
+---
+
+## Bug 6 — SQL / LanceDB injection via f-string in filter_expr
+- **Lines**: 156, 159
+- **Severity**: P1
+- **Description**: `filter_expr = f"category_path = '{category_path}'"` is built via f-string with no escaping. A malicious `category_path` value (e.g., `' OR true OR category_path = '`) can manipulate the LanceDB filter expression. This is a filter injection vulnerability.
+- **Fix**: Escape single quotes in `category_path` before inserting, or use parameterized-style escaping:
+
+```python
+safe_category = category_path.replace("'", "''")
+filter_expr = f"category_path = '{safe_category}'"
+```
+
+Or better: use LanceDB's expression API rather than raw string expressions.
+
+---
+
+## Bug 7 — l3_store.delete() called without await
+- **Line**: 132
+- **Severity**: P2
+- **Description**: `l3_store.delete(memory_id)` is called without `await`. If `delete()` is async (likely, given L3LanceDBStore uses async LanceDB client), this returns a coroutine that never executes, meaning L3 deletion is silently skipped.
+- **Fix**: Add `await`:
+
+```python
+await l3_store.delete(memory_id)
+```
+
+---
+
+## Bug 8 — Inconsistent handling of None category_path in filter_expr
+- **Lines**: 156, 159
+- **Severity**: P3
+- **Description**: When `category_path` is `None`, `filter_expr` is set to `None` and passed to `l3_store.search()`. It's unclear if `l3_store.search()` handles `None` filter gracefully (some backends may error). No test or fallback logic.
+- **Fix**: When `category_path` is `None`, either skip the filter entirely (don't pass it) or ensure `l3_store.search()` explicitly handles `None`.
+
+---
+
+## Bug 9 — Unhandled exception from store.save() / l3_store.upsert()
+- **Lines**: 77–85
+- **Severity**: P2
+- **Description**: If `store.save()` succeeds but `l3_store.upsert()` fails (e.g., DB connection error), the memory is saved to L4 but not indexed. There's no rollback or retry logic. The `/memories` endpoint returns success even though L3 indexing failed.
+- **Fix**: Wrap L3 upsert in try/except and either retry, log the failure, or delete the L4 record to maintain consistency:
+
+```python
+try:
+    l3_store.upsert(...)
+except Exception as e:
+    await store.delete(mem_id)
+    raise HTTPException(status_code=500, detail=f"L3 indexing failed: {e}")
+```
+
+---
+
+## Bug Count: 9 total
+| Severity | Count |
+|----------|-------|
+| P0       | 5     |
+| P1       | 1     |
+| P2       | 2     |
+| P3       | 1     |

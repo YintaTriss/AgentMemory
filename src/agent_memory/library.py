@@ -3,6 +3,7 @@ Library Classifier - 图书馆分类系统
 基于关键词匹配的简单分类器，用于将记忆自动归类到层级路径
 """
 
+import copy
 import re
 from typing import Optional
 
@@ -12,7 +13,7 @@ CATEGORY_DICTIONARY: dict[str, list[str]] = {
     "项目": [
         "项目", "开发", "开发中", "已完成", "进行中", "迭代", "版本",
         "bug", "feature", "任务", "里程碑", "sprint", "冲刺",
-        "石榴籽", "agentmemory", "spectrai", "openclaw",
+        "石榴籽", "agentmemory", "spectr ai", "spectrai", "openclaw",
         "git", "github", "repo", "仓库", "代码", "模块",
     ],
     "学习": [
@@ -22,9 +23,12 @@ CATEGORY_DICTIONARY: dict[str, list[str]] = {
         "论文", "paper", "research", "研究",
     ],
     "人物": [
-        "人", "朋友", "同事", "领导", "老板", "客户", "用户",
+        # P1-4 fix: removed 1-char "人" — token regex requires {2,} chars,
+        # so single-char keywords can NEVER be tokenized, only substring-match
+        # (1 point max vs 2 for proper tokens). Use 2+ char synonyms instead.
+        "朋友", "同事", "领导", "老板", "客户", "用户",
         "联系人", "团队", "成员", "工程师", "设计师", "产品",
-        "cto", "ceo", "pm", "老板", "楚灵", "tmc",
+        "cto", "ceo", "pm", "楚灵", "tmc",
     ],
     "决策": [
         "决定", "决策", "选择", "方案", "策略",
@@ -71,7 +75,13 @@ class LibraryClassifier:
             raise ValueError("max_depth must be >= min_depth")
         self.min_depth = min_depth
         self.max_depth = max_depth
-        self.dictionary = dictionary or CATEGORY_DICTIONARY.copy()
+        # P0-6 fix: use deep copy to prevent add_keyword() from mutating
+        # the global CATEGORY_DICTIONARY. .copy() is shallow — list values
+        # are shared references, so add_keyword() would corrupt global state.
+        if dictionary:
+            self.dictionary = copy.deepcopy(dictionary)
+        else:
+            self.dictionary = copy.deepcopy(CATEGORY_DICTIONARY)
 
     def _tokenize(self, text: str) -> set[str]:
         """
@@ -103,13 +113,21 @@ class LibraryClassifier:
             修正后的路径，保证 min_depth <= 层数 <= max_depth
         """
         if not path or not path.strip():
-            return "未分类/通用" if self.min_depth <= 1 else "未分类"
+            # P1-3 fix: pad to min_depth even on empty input to honor the contract
+            parts = ["未分类"]
+            while len(parts) < self.min_depth:
+                parts.append("通用")
+            return "/".join(parts)
 
         # 分割路径
         parts = [p.strip() for p in path.split("/") if p.strip()]
 
         if not parts:
-            return "未分类/通用" if self.min_depth <= 1 else "未分类"
+            # P1-3 fix: pad to min_depth even when path splits to empty (e.g. all slashes)
+            parts = ["未分类"]
+            while len(parts) < self.min_depth:
+                parts.append("通用")
+            return "/".join(parts)
 
         # 第一层必须为顶层类别之一，否则加"未分类"前缀
         if parts[0] not in TOP_LEVEL_CATEGORIES:
@@ -145,13 +163,17 @@ class LibraryClassifier:
         scores: dict[str, int] = {cat: 0 for cat in TOP_LEVEL_CATEGORIES}
 
         for category, keywords in self.dictionary.items():
+            # P1-5 fix: skip categories not in TOP_LEVEL_CATEGORIES to avoid KeyError
+            if category not in TOP_LEVEL_CATEGORIES:
+                continue
             for keyword in keywords:
                 kw_lower = keyword.lower()
-                # 检查关键词是否在 token 集合中
+                # 检查关键词是否在 token 集合中（至少2字符的词才能tokenize）
                 if kw_lower in tokens:
                     scores[category] += 2  # 精确匹配给 2 分
-                # 检查关键词是否在原文（不区分大小写）
-                elif kw_lower in content.lower():
+                # P2-6 fix: remove elif so single-char keywords can still score
+                # via substring match (they can never be in tokens due to {2,} regex)
+                if kw_lower in content.lower():
                     scores[category] += 1  # 包含给 1 分
 
         # 找出得分最高的类别
@@ -234,12 +256,13 @@ class LibraryClassifier:
 
     def add_keyword(self, category: str, keyword: str) -> None:
         """
-        添加分类关键词
-        
-        Args:
-            category: 分类名称（必须是顶层类别之一）
-            keyword: 要添加的关键词
+        添加分类关键词（必须是顶层类别之一）
+
+        P1-5 fix: only allow adding to TOP_LEVEL_CATEGORIES to prevent
+        KeyError in classify() which guards on TOP_LEVEL_CATEGORIES.
         """
+        if category not in TOP_LEVEL_CATEGORIES:
+            raise ValueError(f"add_keyword: category '{category}' must be one of {TOP_LEVEL_CATEGORIES}")
         if category not in self.dictionary:
             self.dictionary[category] = []
         if keyword not in self.dictionary[category]:

@@ -82,14 +82,19 @@ class SyncManager:
                 "flagged_patterns": matched_patterns,
             }
 
-            self.l3.upsert(
+            # P1-9/P1-10 fix: check upsert return value before writing vec.json.
+            # upsert() now returns bool (l3_lancedb.py P1-10 fix).
+            ok = self.l3.upsert(
                 id=memory_id, content=content, vector=vector,
                 metadata=metadata, importance=importance,
                 category_path=category_path, created_at=created_at,
             )
-
-            self._write_vec_json(memory_id, vector)
-            return True
+            if ok:
+                self._write_vec_json(memory_id, vector)
+                return True
+            else:
+                print(f"[Sync] L3 upsert failed for {memory_id}, skipping vec.json write")
+                return False
 
         except Exception as e:
             print(f"[Sync] Error syncing {memory_id}: {e}")
@@ -141,12 +146,21 @@ class SyncManager:
             return False
     
     def delete_from_l3(self, memory_id: str) -> bool:
+        """
+        Delete memory from L3 and clean up its vec.json file.
+
+        P0-6 fix: propagate actual l3.delete() return value instead of
+        always returning True. Also delete vec_path FIRST to ensure cleanup
+        even if l3.delete() fails.
+        """
         try:
-            self.l3.delete(memory_id)
             vec_path = self.memory_dir / f"{memory_id}.vec.json"
+            # Delete vec.json first (before l3.delete which might fail)
             if vec_path.exists():
                 vec_path.unlink()
-            return True
+            # P0-6: capture and propagate actual return value
+            result = self.l3.delete(memory_id)
+            return result
         except Exception as e:
             print(f"[Sync] Error deleting {memory_id} from L3: {e}")
             return False

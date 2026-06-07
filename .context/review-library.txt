@@ -1,0 +1,224 @@
+================================================================================
+CODE REVIEW: AgentMemory/src/agent_memory/library.py
+================================================================================
+
+NOTE: This review was performed by an AI subagent on 2026-06-07.
+
+================================================================================
+BUG 1
+================================================================================
+Location:   Line 63 — __init__ default dictionary shallow copy
+Severity:   P0
+Description:
+    `dictionary or CATEGORY_DICTIONARY.copy()` creates a SHALLOW copy of the
+    module-level CATEGORY_DICTIONARY. Only the dict structure is copied; the
+    list VALUES are shared references. When add_keyword() is called, it
+    mutates self.dictionary[category], which modifies the shared list in the
+    original CATEGORY_DICTIONARY — permanently corrupting global state.
+Fix:
+    Use a deep copy or rebuild the dictionary with copied lists:
+    
+        import copy
+        self.dictionary = copy.deepcopy(CATEGORY_DICTIONARY)
+    
+    Or rebuild each list:
+    
+        self.dictionary = {k: list(v) for k, v in CATEGORY_DICTIONARY.items()}
+
+================================================================================
+BUG 2
+================================================================================
+Location:   Line 63 — __init__ user-provided dictionary stored by reference
+Severity:   P1
+Description:
+    When a non-None dictionary is passed to __init__, it is stored as-is
+    (no copy). Subsequent calls to add_keyword() MUTATE the caller's original
+    dictionary object as a side effect. If the caller reuses their dict
+    elsewhere, they will see unexpected modifications.
+Fix:
+    Always copy the dictionary, whether default or user-provided:
+    
+        self.dictionary = copy.deepcopy(dictionary) if dictionary else \
+                          copy.deepcopy(CATEGORY_DICTIONARY)
+
+================================================================================
+BUG 3
+================================================================================
+Location:   Lines 86-89 — _validate_path early return violates min_depth
+Severity:   P1
+Description:
+    When `parts` is empty, the method returns early:
+    
+        if not parts:
+            return "未分类/通用" if self.min_depth <= 1 else "未分类"
+    
+    If min_depth > 1 (e.g., 3), this returns "未分类" (depth = 1), which is
+    SHORTER than the guaranteed minimum depth. The API contract states
+    "min_depth <= 层数 <= max_depth" but the early return breaks it.
+Fix:
+    Pad to min_depth before returning:
+    
+        if not parts:
+            parts = ["未分类"]
+            while len(parts) < self.min_depth:
+                parts.append("通用")
+            return "/".join(parts)
+
+================================================================================
+BUG 4
+================================================================================
+Location:   Lines 40-41 — CATEGORY_DICTIONARY contains 1-char Chinese keywords
+            that can NEVER be matched as tokens
+Severity:   P1
+Description:
+    _tokenize extracts Chinese characters with the regex `[\u4e00-\u9fff]{2,}`
+    (minimum 2 characters). However, CATEGORY_DICTIONARY["人物"] contains the
+    single-character keyword "人". This keyword can NEVER appear in the token
+    set, so `kw_lower in tokens` is always False for it. The keyword only
+    matches via the slower substring path (`kw_lower in content.lower()`).
+    
+    This causes:
+    (a) Inconsistent scoring — single-char keywords always get 1 point max,
+        multi-char keywords can get 2 points.
+    (b) Performance degradation — single-char keywords always fall through to
+        the substring scan even when they could be token-matched.
+Fix:
+    Remove or expand single-character keywords in CATEGORY_DICTIONARY:
+    
+        "人物": [
+            # REMOVE: "人",  <-- never tokenizes, use 2+ char synonyms
+            "朋友", "同事", "领导", "老板", "客户", "用户",
+            ...
+        ],
+
+================================================================================
+BUG 5
+================================================================================
+Location:   Lines 111-112 — classify() raises KeyError for non-top-level categories
+Severity:   P1
+Description:
+    `scores` is initialized with only TOP_LEVEL_CATEGORIES keys. The loop:
+    
+        for category, keywords in self.dictionary.items():
+            ...
+            scores[category] += ...
+    
+    iterates over ALL entries in self.dictionary. If self.dictionary contains
+    a category not in TOP_LEVEL_CATEGORIES (e.g., from a custom dict passed to
+    __init__), `scores[category]` raises KeyError.
+    
+    Additionally, if someone calls add_keyword("非顶层类别", "kw"), it creates
+    the entry in self.dictionary. The next classify() call would KeyError on
+    that category.
+Fix:
+    Guard the score assignment:
+    
+        for category, keywords in self.dictionary.items():
+            if category not in TOP_LEVEL_CATEGORIES:
+                continue  # silently skip unknown categories
+            for keyword in keywords:
+                ...
+
+================================================================================
+BUG 6
+================================================================================
+Location:   Lines 170-171 — _infer_subcategory "spectr-ai" keyword won't tokenize
+Severity:   P2
+Description:
+    In _infer_subcategory for the "项目" category:
+    
+        "SpectrAI": ["spectrai", "spectr-ai"],
+    
+    The keyword "spectr-ai" contains a hyphen. The _tokenize regex
+    `\b[a-z][a-z0-9_.-]*\b` extracts tokens at word boundaries. In most regex
+    engines, `\b` does not match at the transition from a letter to a hyphen
+    (because hyphen is not a word character), so "spectr-ai" may not be
+    extracted as a token at all.
+    
+    This means "spectr-ai" can only match via the substring path
+    (`kw in content_lower`), which is slower and less precise.
+Fix:
+    Use keywords without hyphens, or ensure both hyphenated and non-hyphenated
+    forms are in the keyword list:
+    
+        "SpectrAI": ["spectrai", "spectr ai", "spectrai"],
+
+================================================================================
+BUG 7
+================================================================================
+Location:   Lines 195-202 — get_all_paths() is incomplete/misleading
+Severity:   P2
+Description:
+    The docstring promises "获取所有可能的分类路径" (all possible classification
+    paths), but get_all_paths() only returns the 5 top-level category names:
+    ["项目", "学习", "人物", "决策", "偏好"].
+    
+    The actual classification paths (returned by classify()) include
+    subcategory levels like "项目/石榴籽", "学习/AI", etc. These are NEVER
+    returned by get_all_paths().
+    
+    If a caller uses get_all_paths() to enumerate all valid paths (e.g., for
+    building a UI tree or validation), they will have an incomplete list.
+Fix:
+    Either:
+    (a) Update the docstring to accurately reflect what is returned:
+        "Returns top-level category names"
+    (b) Or implement a recursive path builder that iterates _infer_subcategory
+        to construct all possible subcategory combinations.
+
+================================================================================
+BUG 8
+================================================================================
+Location:   Line 108-113 — classify() scoring: single-char keywords always lose
+Severity:   P2
+Description:
+    Due to the elif structure:
+    
+        if kw_lower in tokens:
+            scores[category] += 2
+        elif kw_lower in content.lower():
+            scores[category] += 1
+    
+    A single-character keyword like "人" that exists in content:
+    - Gets 0 points from token check (never in tokens — see Bug 4)
+    - Gets 1 point from substring check
+    
+    A 2+ character keyword like "石榴籽" that exists in content:
+    - Gets 2 points from token check
+    - Gets 1 point from substring check (but elif skips it)
+    
+    This creates systematic bias: multi-char keywords score 2x higher than
+    single-char ones, purely due to tokenization, not actual importance.
+Fix:
+    Remove the elif so both matches can contribute (or document this as
+    intentional behavior):
+    
+        if kw_lower in tokens:
+            scores[category] += 2
+        if kw_lower in content.lower():
+            scores[category] += 1
+
+================================================================================
+SUMMARY
+================================================================================
+
+P0 (Critical):
+  - Bug 1: Shallow copy of CATEGORY_DICTIONARY — global state corruption
+
+P1 (High):
+  - Bug 2: User-provided dict mutated by add_keyword (side effect)
+  - Bug 3: _validate_path returns path shorter than min_depth
+  - Bug 4: 1-char Chinese keywords never tokenize — inconsistent scoring
+  - Bug 5: classify() KeyError for non-top-level dictionary categories
+
+P2 (Medium):
+  - Bug 6: "spectr-ai" keyword may not tokenize due to hyphen
+  - Bug 7: get_all_paths() returns incomplete path list (docstring lie)
+  - Bug 8: Scoring systematically penalizes single-char keywords
+
+P3 (Low):
+  - No additional issues identified at this severity.
+
+================================================================================
+END OF REVIEW
+================================================================================

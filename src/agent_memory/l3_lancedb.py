@@ -201,13 +201,19 @@ class L3LanceDBStore:
     def upsert(self, id: str, content: str, vector: List[float],
                metadata: Optional[Dict[str, Any]] = None,
                importance: float = 0.5, category_path: str = "general",
-               created_at: Optional[str] = None) -> None:
-        """Insert or update a memory record."""
+               created_at: Optional[str] = None) -> bool:
+        """
+        Insert or update a memory record.
+
+        Returns True on success, False on failure.
+        P1-10 fix: now returns bool so callers (e.g. sync.py) can detect
+        and handle L3 upsert failures.
+        """
         if created_at is None:
             created_at = datetime.now().isoformat()
         if metadata is None:
             metadata = {}
-        
+
         if self._use_fallback:
             self._fallback_data[id] = {
                 "id": id, "content": content, "vector": vector,
@@ -216,19 +222,25 @@ class L3LanceDBStore:
                 "created_at": created_at,
             }
             self._save_fallback()
+            return True
         else:
             try:
                 self._table.delete(f"id = '{id}'")
             except Exception:
                 pass
-            
-            vector_arr = np.array(vector, dtype=np.float32)
-            self._table.add([{
-                "id": id, "content": content, "vector": vector_arr,
-                "metadata": json.dumps(metadata, ensure_ascii=False),
-                "importance": float(importance), "category_path": category_path,
-                "created_at": created_at,
-            }])
+
+            try:
+                vector_arr = np.array(vector, dtype=np.float32)
+                self._table.add([{
+                    "id": id, "content": content, "vector": vector_arr,
+                    "metadata": json.dumps(metadata, ensure_ascii=False),
+                    "importance": float(importance), "category_path": category_path,
+                    "created_at": created_at,
+                }])
+                return True
+            except Exception as e:
+                print(f"[L3] upsert error for {id}: {e}")
+                return False
     
     def search(self, query_vector: List[float], top_k: int = 5,
                filter_expr: Optional[str] = None) -> List[Dict[str, Any]]:

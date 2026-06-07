@@ -7,6 +7,7 @@ Exposes REST endpoints for memory operations.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 try:
@@ -63,6 +64,28 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
     l3_store = L3LanceDBStore(db_path=db_path)
     classifier = LibraryClassifier()
 
+    # ---- Internal helpers ----
+
+    async def _get_embedding(embedder, text: str) -> list:
+        """
+        Get embedding vector, handling both sync and async embedders.
+
+        P0-5 fix: DashScopeEmbedder.embed() is async (returns coroutine),
+        HashEmbedder.embed() is sync. Detect and handle both correctly.
+        """
+        if asyncio.iscoroutinefunction(embedder.embed):
+            return await embedder.embed(text)
+        return embedder.embed(text)
+
+    def _escape_filter(value: str) -> str:
+        """
+        Escape single quotes in filter values to prevent LanceDB injection.
+
+        P1-2 fix: category_path in f-string filter_expr had SQL injection risk.
+        Escape single quotes by doubling them (SQL standard).
+        """
+        return value.replace("'", "''")
+
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": __version__}
@@ -84,15 +107,21 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
         # Also index in L3
         from .embedder import get_embedder
         embedder = get_embedder()
-        vec = embedder.embed(req.content)
-        l3_store.upsert(
-            id=mem_id,
-            content=req.content,
-            vector=vec,
-            metadata=metadata,
-            importance=req.importance,
-            category_path=category,
-        )
+        # P0-5 fix: handle async embedder (DashScope) vs sync (HashEmbedder)
+        vec = await _get_embedding(embedder, req.content)
+        # P1-1 fix: rollback L4 if L3 upsert fails to maintain consistency
+        try:
+            l3_store.upsert(
+                id=mem_id,
+                content=req.content,
+                vector=vec,
+                metadata=metadata,
+                importance=req.importance,
+                category_path=category,
+            )
+        except Exception as e:
+            await store.delete(mem_id)
+            raise HTTPException(status_code=500, detail=f"L3 indexing failed: {e}")
 
         return {"id": mem_id, "category_path": category}
 
@@ -101,16 +130,31 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
         category_path: Optional[str] = None,
         limit: int = Query(20, ge=1, le=1000),
     ):
-        """List memories, optionally filtered by category."""
+        """
+        List memories, optionally filtered by category.
+
+        P0-1/2 fix: get_all_by_category() and list_all() do not exist on
+        L4FilesStore. Replaced with list() + load_existing() approach.
+        """
+        all_ids = store.list()  # store.list() is sync, returns List[str]
         if category_path:
-            records = await store.get_all_by_category(category_path)
-        else:
-            all_ids = await store.list_all()
-            records = []
-            for mid in all_ids[:limit]:
-                content = await store.load(mid)
-                meta = await store.get_meta(mid)
-                records.append({"id": mid, "content": content, "meta": meta})
+            # Filter by category using load_existing()
+            filtered = []
+            for mid in all_ids:
+                mem = await store.load_existing(mid)
+                if mem and mem.get("meta", {}).get("category_path") == category_path:
+                    filtered.append(mid)
+            all_ids = filtered
+
+        records = []
+        for mid in all_ids[:limit]:
+            mem = await store.load_existing(mid)
+            if mem:
+                records.append({
+                    "id": mid,
+                    "content": mem.get("content", ""),
+                    "meta": mem.get("meta", {}),
+                })
 
         return {
             "count": len(records),
@@ -127,19 +171,27 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
 
     @app.get("/memories/{memory_id}")
     async def get_memory(memory_id: str):
-        """Get a single memory by ID."""
-        content = await store.load(memory_id)
-        if not content:
+        """
+        Get a single memory by ID.
+
+        P0-3 fix: get_meta() does not exist on L4FilesStore.
+        Use load_existing() which returns {content, meta} in one call.
+        """
+        mem = await store.load_existing(memory_id)
+        if not mem:
             raise HTTPException(status_code=404, detail="Memory not found")
-        meta = await store.get_meta(memory_id)
-        return {"id": memory_id, "content": content, "meta": meta or {}}
+        return {
+            "id": memory_id,
+            "content": mem.get("content", ""),
+            "meta": mem.get("meta", {}),
+        }
 
     @app.delete("/memories/{memory_id}")
     async def delete_memory(memory_id: str):
-        """Delete a memory."""
+        """Delete a memory from both L4 and L3."""
         ok = await store.delete(memory_id)
         if ok:
-            l3_store.delete(memory_id)
+            l3_store.delete(memory_id)  # sync, no await needed
         return {"deleted": ok}
 
     # ---- Search ----
@@ -159,20 +211,23 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
             raw = l3_store.search_bm25(q, top_k=top_k)
             return {"mode": "bm25", "query": q, "results": raw}
 
-        query_vector = embedder.embed(q)
+        # P0-5 fix: handle async embedder
+        query_vector = await _get_embedding(embedder, q)
+
+        # P1-2 fix: escape single quotes in category_path to prevent injection
+        filter_expr = None
+        if category_path:
+            filter_expr = f"category_path = '{_escape_filter(category_path)}'"
 
         if mode == "vector":
-            filter_expr = f"category_path = '{category_path}'" if category_path else None
             raw = l3_store.search(query_vector, top_k=top_k, filter_expr=filter_expr)
             return {"mode": "vector", "query": q, "results": raw}
 
         # hybrid
-        filter_expr = f"category_path = '{category_path}'" if category_path else None
         vec_results = l3_store.search(query_vector, top_k=top_k * 2, filter_expr=filter_expr)
         bm25_results = l3_store.search_bm25(q, top_k=top_k * 2)
 
-        # Inline hybrid fusion (reuse search_hybrid logic inline to avoid extra import)
-        # Normalize
+        # Inline hybrid fusion
         max_vec = max((r.get("score", 0) for r in vec_results), default=1.0)
         max_bm = max((r.get("bm25_score", 0) for r in bm25_results), default=1.0)
         alpha = 0.7
