@@ -175,8 +175,9 @@ async def cmd_add(
     import os as _os
     _db_path = _os.path.join(_os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
     _l3 = L3LanceDBStore(db_path=_db_path)
-    _embedder = get_embedder(backend="hash")
-    # P1-1 fix: use embed_sync if available (DashScopeEmbedder is async)
+    # Sugg-3 fix: use auto backend (returns HashEmbedder when no API key, matching
+    # the documented contract). The embed_sync fallback below handles async embedders.
+    _embedder = get_embedder()
     _embed_fn = _embedder.embed_sync if hasattr(_embedder, "embed_sync") else _embedder.embed
     _vec = _embed_fn(content)
     _l3.upsert(id=memory_id, content=content, vector=_vec, metadata=full_meta,

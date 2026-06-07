@@ -222,43 +222,39 @@ class LibraryClassifier:
         content_lower = content.lower()
 
         # 根据顶层类别进行更细粒度的推断
+        # Sugg-1 fix: use score-based resolution instead of returning first match.
+        # Count keyword hits per subcategory, return the one with most matches.
         if top_category == "项目":
-            # 尝试识别项目名称
-            project_keywords = {
+            sub_keywords = {
                 "石榴籽": ["石榴籽", "石榴"],
-                "SpectrAI": ["spectrai", "spectr ai"],  # spectr-ai tokenizes as two tokens
+                "SpectrAI": ["spectrai", "spectr ai"],
                 "AgentMemory": ["agentmemory", "agent_memory", "memory"],
                 "OpenClaw": ["openclaw", "open_claw", "claw"],
             }
-            for sub, kws in project_keywords.items():
-                for kw in kws:
-                    if kw in tokens or kw in content_lower:
-                        return sub
-
         elif top_category == "学习":
-            # 尝试识别学习主题
-            learning_keywords = {
+            sub_keywords = {
                 "技术": ["python", "rust", "代码", "编程", "api", "sdk"],
                 "AI": ["ai", "llm", "大模型", "模型", "人工智能", "ml"],
                 "语言": ["英语", "日语", "中文", "language"],
             }
-            for sub, kws in learning_keywords.items():
-                for kw in kws:
-                    if kw in tokens or kw in content_lower:
-                        return sub
-
         elif top_category == "人物":
-            # 尝试识别人物
-            person_keywords = {
+            sub_keywords = {
                 "团队": ["团队", "team", "成员", "同事"],
                 "外部": ["客户", "用户", "合作", "partner"],
             }
-            for sub, kws in person_keywords.items():
-                for kw in kws:
-                    if kw in tokens or kw in content_lower:
-                        return sub
+        else:
+            return None
 
-        return None
+        # Score each subcategory by keyword hit count
+        scores: dict[str, float] = {sub: 0.0 for sub in sub_keywords}
+        for sub, kws in sub_keywords.items():
+            for kw in kws:
+                if kw in tokens or kw in content_lower:
+                    scores[sub] += 1.0
+
+        # Return subcategory with highest score (if any hits)
+        best_sub = max(scores, key=lambda s: scores[s])
+        return best_sub if scores[best_sub] > 0 else None
 
     def add_keyword(self, category: str, keyword: str) -> None:
         """

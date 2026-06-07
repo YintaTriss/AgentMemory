@@ -31,8 +31,21 @@ class SyncManager:
         self.memory_dir = Path(memory_dir)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         
+        # Architecture spec §6.1: 6 trigger categories with Chinese + English keywords.
+        # Match is case-insensitive substring on lowercased content.
         self.auto_sync_keywords = [
-            "记住", "决定", "重要", "完成", "项目", "计划",
+            # 决策
+            "决定", "决策", "确定", "敲定",
+            # 完成
+            "完成", "结束", "done", "finished", "搞定",
+            # 重要
+            "重要", "关键", "critical", "important", "要紧",
+            # 记住
+            "记住", "记下", "备忘", "remember", "memo",
+            # 项目
+            "项目", "project", "里程碑", "milestone", "sprint",
+            # 进展
+            "进展", "进度", "progress", "更新", "update", "迭代",
         ]
     
     async def sync_one(self, memory_id: str) -> bool:
@@ -134,11 +147,10 @@ class SyncManager:
             content = mem.get("content", "")
             if not content:
                 return False
-            trigger_patterns = [
-                "记住", "决定", "重要", "完成", "项目", "进展",
-            ]
-            for pattern in trigger_patterns:
-                if pattern in content:
+            # Architecture spec §6.1: substring match, case-insensitive
+            content_lower = content.lower()
+            for pattern in self.auto_sync_keywords:
+                if pattern in content_lower:
                     return True
             return False
         except Exception as e:

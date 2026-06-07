@@ -257,7 +257,10 @@ def check_injection(text: str) -> Tuple[bool, float, List[str]]:
 
 
 # 自测
+# Sugg-2 fix: 改用 assert 强制验证，添加维护注释说明期望值需随模式调整更新
 if __name__ == "__main__":
+    # ATTENTION: 如果修改了模式定义（_INJECTION_PATTERNS 或 trust_score 阈值），
+    # 必须同步更新这里的期望值。否则自测会 assert 失败。
     test_cases = [
         # 正常文本
         ("用户参加石榴籽省赛项目", False, 1.0),
@@ -286,10 +289,15 @@ if __name__ == "__main__":
     all_passed = True
     for text, expected_flagged, expected_score in test_cases:
         flagged, score, matched = check_injection(text)
-        status = "PASS" if flagged == expected_flagged and abs(score - expected_score) < 0.05 else "FAIL"
-        if status == "FAIL":
+        try:
+            assert flagged == expected_flagged, \
+                f"flagged={flagged}, expected {expected_flagged}, matched={matched}"
+            assert abs(score - expected_score) < 0.05, \
+                f"score={score:.4f}, expected ~{expected_score}"
+            print(f"  [PASS] {text!r}")
+        except AssertionError as e:
+            print(f"  [FAIL] {text!r}: {e}")
             all_passed = False
-        print(f"  [{status}] text={text!r}")
-        print(f"         flagged={flagged} (exp {expected_flagged}), score={score:.2f} (exp {expected_score}), matched={matched}")
-
     print(f"\n{'ALL PASSED' if all_passed else 'SOME FAILED'}")
+    if not all_passed:
+        raise SystemExit(1)

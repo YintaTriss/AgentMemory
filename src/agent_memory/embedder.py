@@ -14,18 +14,52 @@ import hashlib
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Callable
 
 import numpy as np
 
 
 class Embedder(ABC):
-    """向量嵌入抽象基类"""
+    """
+    向量嵌入抽象基类。
+
+    embed() / embed_batch() 可以是 sync 或 async 实现：
+    - HashEmbedder: sync 实现
+    - DashScopeEmbedder: async 实现 (embed() = async def)
+
+    同步调用方应使用 embed_sync / embed_batch_sync 属性，
+    或者使用 _embed_fn / _embed_batch_fn 工厂方法获取正确的同步调用接口。
+
+    架构要求：DashScopeEmbedder.__init__ 时校验 API key 存在，
+    缺失则抛 RuntimeError，不允许静默降级。
+    """
 
     @property
     @abstractmethod
     def dim(self) -> int:
         pass
+
+    @property
+    def embed_sync(self) -> Callable[[str], list[float]]:
+        """
+        返回同步版本的 embed 方法。
+        子类应覆盖此属性以提供正确的同步接口。
+        默认实现：对 async embed，尝试在子线程运行；对 sync embed，直接返回 embed 方法。
+        """
+        import asyncio
+        _embed = self.embed
+        # 如果本身就是 sync，直接返回
+        if not asyncio.iscoroutinefunction(_embed):
+            return _embed
+        # async 实现：包装为在子线程运行
+        def _sync_wrapper(text: str) -> list[float]:
+            try:
+                return asyncio.run(_embed(text))
+            except RuntimeError:  # 已在某个 event loop 内
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(asyncio.run, _embed(text)).result()
+        return _sync_wrapper
 
     @abstractmethod
     def embed(self, text: str) -> list[float]:
@@ -97,6 +131,12 @@ class DashScopeEmbedder(Embedder):
         base_url: str = "https://dashscope.aliyuncs.com/api/v1",
     ):
         self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
+        if not self._api_key:
+            raise RuntimeError(
+                "DashScopeEmbedder requires DASHSCOPE_API_KEY environment variable or "
+                "api_key argument. Do not instantiate DashScopeEmbedder without a valid key; "
+                "use get_embedder() instead (auto-selects HashEmbedder when no key)."
+            )
         self._model = model
         self._dim = dim
         self._base_url = base_url.rstrip("/")
