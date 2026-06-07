@@ -21,7 +21,7 @@ Components:
 - IntegrityVerifier: HMAC signature verification
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.4"
 __author__ = "楚灵"
 __license__ = "MIT"
 
