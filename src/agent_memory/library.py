@@ -47,17 +47,29 @@ TOP_LEVEL_CATEGORIES = ["项目", "学习", "人物", "决策", "偏好"]
 class LibraryClassifier:
     """
     图书馆分类器
-    基于关键词匹配将内容归类到层级路径，最多 4 层
+    基于关键词匹配将内容归类到层级路径，动态层数范围 [min_depth, max_depth]。
+    默认最少 2 层（顶层 + 子层），最多 4 层。
     """
 
-    def __init__(self, max_depth: int = 4, dictionary: Optional[dict[str, list[str]]] = None):
+    def __init__(
+        self,
+        min_depth: int = 2,
+        max_depth: int = 4,
+        dictionary: Optional[dict[str, list[str]]] = None,
+    ):
         """
         初始化分类器
-        
+
         Args:
+            min_depth: 最少分类深度（默认 2 层，顶层 + 子层）
             max_depth: 最大分类深度（默认 4 层）
             dictionary: 可选的分类词典，格式为 {分类名: [关键词列表]}
         """
+        if min_depth < 1:
+            raise ValueError("min_depth must be >= 1")
+        if max_depth < min_depth:
+            raise ValueError("max_depth must be >= min_depth")
+        self.min_depth = min_depth
         self.max_depth = max_depth
         self.dictionary = dictionary or CATEGORY_DICTIONARY.copy()
 
@@ -83,34 +95,33 @@ class LibraryClassifier:
     def _validate_path(self, path: str) -> str:
         """
         验证并修正分类路径
-        
+
         Args:
             path: 分类路径，如 "项目/石榴籽/语料"
-        
+
         Returns:
-            修正后的路径
-        
-        Raises:
-            ValueError: 如果路径为空或包含非法字符
+            修正后的路径，保证 min_depth <= 层数 <= max_depth
         """
         if not path or not path.strip():
-            return "未分类"
+            return "未分类/通用" if self.min_depth <= 1 else "未分类"
 
         # 分割路径
         parts = [p.strip() for p in path.split("/") if p.strip()]
 
         if not parts:
-            return "未分类"
+            return "未分类/通用" if self.min_depth <= 1 else "未分类"
 
-        # 检查第一层是否是顶层类别
+        # 第一层必须为顶层类别之一，否则加"未分类"前缀
         if parts[0] not in TOP_LEVEL_CATEGORIES:
-            # 如果第一层不是顶层类别，整个路径放到"未分类"
-            # 但允许直接使用子路径
-            pass
+            parts.insert(0, "未分类")
 
-        # 限制深度
+        # 限制最大深度
         if len(parts) > self.max_depth:
             parts = parts[:self.max_depth]
+
+        # 补足最小深度（不够层时用"通用"填充）
+        while len(parts) < self.min_depth:
+            parts.append("通用")
 
         return "/".join(parts)
 

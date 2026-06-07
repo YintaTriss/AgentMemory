@@ -22,20 +22,35 @@ except ImportError:
 
 
 class L3LanceDBStore:
-    """L3 Vector Store using LanceDB (or JSON fallback)."""
-    
-    def __init__(self, db_path: str = "data/lancedb", table_name: str = "memories"):
+    """L3 Vector Store using LanceDB (or JSON fallback).
+
+    Args:
+        db_path: Directory for LanceDB or fallback JSON.
+        table_name: LanceDB table name.
+        force_fallback: If True, always use JSON fallback even if LanceDB is available.
+    """
+
+    def __init__(
+        self,
+        db_path: str = "data/lancedb",
+        table_name: str = "memories",
+        *,  # force keyword-only
+        force_fallback: bool = False,
+    ):
         self.db_path = db_path
         self.table_name = table_name
         self._db = None
         self._table = None
-        self._use_fallback = not LANCEDB_AVAILABLE
-        self._fallback_data: Dict[str, Dict[str, Any]] = {}
-        
-        if not self._use_fallback:
-            self._init_lancedb()
-        else:
+
+        if force_fallback:
+            self._use_fallback = True
             self._init_fallback()
+        elif not LANCEDB_AVAILABLE:
+            self._use_fallback = True
+            self._init_fallback()
+        else:
+            self._use_fallback = False
+            self._init_lancedb()
     
     def _get_schema(self) -> pa.Schema:
         """Get PyArrow schema for LanceDB table."""
