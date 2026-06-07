@@ -4,6 +4,7 @@
 > **版本**：v1.0.0
 > **完成时间**：2026-06-04
 > **提交人**：Team Leader 协调 + 6 名成员（architect / backend / backend2 / frontend / qa / qa2）
+> **注意**：以下路径为 SpectrAI Team Leader 本地 Windows 路径，仅作交付位置记录。标准安装请使用 GitHub 仓库或 `pip install -e .`
 
 ---
 

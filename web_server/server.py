@@ -17,8 +17,14 @@ from fastapi import FastAPI
 import uvicorn
 
 # 添加AgentMemory src目录到路径
-AGENTMEMORY_PATH = Path(__file__).parent.parent / "workspace" / "AgentMemory"
-sys.path.insert(0, str(AGENTMEMORY_PATH / "src"))
+# 方式：默认从 web_server/ 的父目录（即项目根目录）找 src/
+# 环境变量 AGENTMEMORY_PATH 可覆盖（用于非标准安装）
+_AGENTMEMORY_ROOT = Path(os.environ.get(
+    "AGENTMEMORY_PATH",
+    Path(__file__).parent.parent  # 默认：AgentMemory/ (即 web_server 的上两级)
+))
+AGENTMEMORY_PATH = _AGENTMEMORY_ROOT
+sys.path.insert(0, str(_AGENTMEMORY_ROOT / "src"))
 
 from models import (
     StoreRequest, QueryRequest, StoreResponse, QueryResponse,

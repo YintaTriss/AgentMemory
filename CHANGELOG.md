@@ -60,6 +60,38 @@ category     List categories
 stats        Show statistics
 ```
 
+## Migration from v0.2 → v0.3
+
+### Removed APIs
+- `L2_graph_store.GraphStore` → removed (use `L1LCMCompressor.extract_facts` instead)
+- `DecayEngine` → removed (use L4 metadata `importance` field for prioritization)
+- v0.2 config sections `l2` and `decay` → no longer needed, delete from config
+
+### Config Migration
+```python
+# v0.2 config (REMOVE these sections in v0.3)
+config = {
+    "l2": {"enabled": True},
+    "decay": {"policy": "LRU"},
+    # keep everything else
+}
+# v0.3: delete "l2" and "decay" keys, rest is unchanged
+```
+
+### Import Migration
+```python
+# v0.2
+from agent_memory import MemoryManager  # same in v0.3
+from agent_memory.graph_store import GraphStore  # REMOVED
+from agent_memory.decay import DecayEngine  # REMOVED
+
+# v0.3
+from agent_memory import MemoryManager
+# L2 functionality replaced by L1LCMCompressor
+```
+
+---
+
 ### Security
 
 > 详细说明见 `docs/SECURITY.md` 与 `docs/ARCHITECTURE-IMPL.md` 第 17 章。

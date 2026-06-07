@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 
-AgentMemory v0.3 is a simplified, zero-dependency memory system for AI agents. It uses a **3-layer architecture** with **dual-track retrieval** and **library-style classification**.
+AgentMemory v0.3 is a lightweight memory system for AI agents with 8 core dependencies. It uses a **3-layer architecture** with **dual-track retrieval** and **library-style classification**.
 
 ## Core Concepts
 
@@ -167,7 +167,7 @@ memory/
 ### Key Innovations
 
 1. **Dual-track**: File + Vector always coexist
-2. **Zero dependency**: Just needs a folder + optional embedding model
+2. **Minimal dependencies**: Core needs only `httpx`, `aiofiles`, `pydantic`; LanceDB is optional (falls back to JSON if absent)
 3. **Hot-swappable**: Copy folder = migrate entire memory library
 4. **Library classification**: Up to 4-level hierarchical tags
 
