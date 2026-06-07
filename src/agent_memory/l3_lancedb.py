@@ -338,9 +338,21 @@ class L3LanceDBStore:
 
 
     def count(self) -> int:
-        """Return the number of memories."""
+        """Return the number of memories.
+
+        P2-1 fix: try count_rows() first (O(1) in LanceDB 0.4+), fall back
+        to len(to_list()) only when unavailable.
+        """
         if self._use_fallback:
             return len(self._fallback_data)
+        try:
+            # LanceDB 0.4+ has count_rows() — use it when available
+            return self._table.count_rows()
+        except AttributeError:
+            # count_rows not available in older LanceDB versions
+            pass
+        except Exception:
+            pass
         try:
             return len(self._table.to_list())
         except Exception:
@@ -366,8 +378,17 @@ class L3LanceDBStore:
         except Exception:
             return list(self._fallback_data.values())
 
-    def search_bm25(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_bm25(self, query: str, top_k: int = 5,
+                   k1: float = 1.2, b: float = 0.75) -> List[Dict[str, Any]]:
         """Pure-BM25 keyword search across all stored content.
+
+        Args:
+            query: Search query text.
+            top_k: Number of top results to return.
+            k1: BM25 term frequency saturation parameter (default 1.2).
+                Higher values give more weight to term frequency.
+            b: BM25 document length normalization parameter (default 0.75).
+                Higher values penalize longer documents more.
 
         Falls back to an empty list if no documents are indexed.
         """
@@ -376,7 +397,8 @@ class L3LanceDBStore:
             return []
 
         texts = [r.get("content", "") or "" for r in all_records]
-        indexer = BM25Indexer()
+        # P2-9 fix: k1 and b are now configurable (were hardcoded)
+        indexer = BM25Indexer(k1=k1, b=b)
         indexer.index(texts)
         bm25_results = indexer.search(query, top_k=top_k)
 

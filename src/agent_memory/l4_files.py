@@ -142,8 +142,8 @@ def _file_lock(lock_path: Path, exclusive: bool = True):
         if sys.platform == "win32":
             try:
                 msvcrt.unlock(lock_file.fileno())
-            except:
-                pass
+            except Exception:
+                pass  # Unlock failed — lock already released or OS error. Ignore.
         else:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         lock_file.close()

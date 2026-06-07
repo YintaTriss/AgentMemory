@@ -136,25 +136,32 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
         P0-1/2 fix: get_all_by_category() and list_all() do not exist on
         L4FilesStore. Replaced with list() + load_existing() approach.
         """
-        all_ids = store.list()  # store.list() is sync, returns List[str]
-        if category_path:
-            # Filter by category using load_existing()
-            filtered = []
-            for mid in all_ids:
-                mem = await store.load_existing(mid)
-                if mem and mem.get("meta", {}).get("category_path") == category_path:
-                    filtered.append(mid)
-            all_ids = filtered
-
-        records = []
+        all_ids = store.list()  # sync, returns List[str]
+        # P2-4 fix: load each memory ONCE (was loading twice when category_path
+        # was set — once for filter, once for record building = N+1 query problem).
+        # Build mem_map upfront, then filter and build records in a single pass.
+        mem_map = {}
         for mid in all_ids[:limit]:
             mem = await store.load_existing(mid)
             if mem:
-                records.append({
-                    "id": mid,
-                    "content": mem.get("content", ""),
-                    "meta": mem.get("meta", {}),
-                })
+                mem_map[mid] = mem
+
+        if category_path:
+            filtered_ids = [
+                mid for mid, mem in mem_map.items()
+                if mem.get("meta", {}).get("category_path") == category_path
+            ]
+        else:
+            filtered_ids = list(mem_map.keys())
+
+        records = [
+            {
+                "id": mid,
+                "content": mem_map[mid].get("content", ""),
+                "meta": mem_map[mid].get("meta", {}),
+            }
+            for mid in filtered_ids
+        ]
 
         return {
             "count": len(records),

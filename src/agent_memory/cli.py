@@ -244,7 +244,11 @@ async def cmd_search(
     else:
         # vector mode
         query_vector = embedder.embed(query)
-        filter_expr = f"category_path = '{category}'" if category else None
+        # P2 fix: escape single quotes in category to prevent LanceDB injection
+        filter_expr = None
+        if category:
+            safe_cat = category.replace("'", "''")
+            filter_expr = f"category_path = '{safe_cat}'"
         raw = l3_store.search(query_vector, top_k=limit, filter_expr=filter_expr)
         results = [
             {

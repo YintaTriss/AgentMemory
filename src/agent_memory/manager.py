@@ -66,7 +66,13 @@ class MemoryManager:
     
     async def search(self, query: str, limit: int = 5,
                     category_path: Optional[str] = None) -> List[Dict[str, Any]]:
-        query_vector = self.embedder.embed(query)
+        # P2 latent fix: handle async embedder (DashScopeEmbedder). In practice
+        # manager always gets HashEmbedder, but be safe.
+        import asyncio
+        if asyncio.iscoroutinefunction(self.embedder.embed):
+            query_vector = await self.embedder.embed(query)
+        else:
+            query_vector = self.embedder.embed(query)
         filter_expr = None
         if category_path:
             # P1-3 fix: escape single quotes in category_path to prevent SQL injection
@@ -93,23 +99,37 @@ class MemoryManager:
     
     async def list(self, category_path: Optional[str] = None,
                    limit: int = 20) -> List[Dict[str, Any]]:
-        memory_ids = self.l4.list()
-        memories = []
-        for memory_id in memory_ids[:limit]:
+        # P2-4 fix (manager.py): load each memory once instead of twice.
+        # Previous pattern: load all → filter in Python (N times for N items).
+        # New pattern: load all in one pass, then filter.
+        all_ids = self.l4.list()
+        mem_map = {}
+        for memory_id in all_ids[:limit]:
             mem = await self.l4.load_existing(memory_id)
             if mem:
-                meta = mem.get("meta", {})
-                memories.append({
-                    "id": memory_id, 
-                    "content": mem.get("content", ""),
-                    "category": meta.get("category_path", ""),
-                    "tags": meta.get("tags", []),
-                    "importance": meta.get("importance", 0.5),
-                    "created_at": meta.get("created_at", ""),
-                    "source": meta.get("source", ""),
-                })
+                mem_map[memory_id] = mem
+
         if category_path:
-            memories = [x for x in memories if x.get("category") == category_path]
+            filtered_ids = [
+                mid for mid, mem in mem_map.items()
+                if mem.get("meta", {}).get("category_path") == category_path
+            ]
+        else:
+            filtered_ids = list(mem_map.keys())
+
+        memories = []
+        for memory_id in filtered_ids:
+            mem = mem_map[memory_id]
+            meta = mem.get("meta", {})
+            memories.append({
+                "id": memory_id,
+                "content": mem.get("content", ""),
+                "category": meta.get("category_path", ""),
+                "tags": meta.get("tags", []),
+                "importance": meta.get("importance", 0.5),
+                "created_at": meta.get("created_at", ""),
+                "source": meta.get("source", ""),
+            })
         return memories
     
     async def get(self, memory_id: str) -> Optional[Dict[str, Any]]:

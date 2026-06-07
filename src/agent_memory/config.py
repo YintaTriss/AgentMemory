@@ -34,6 +34,10 @@ class Config:
         """
         self.memory_dir = memory_dir or os.environ.get("AGENT_MEMORY_DIR", self.DEFAULT_MEMORY_DIR)
         self.data_dir = os.environ.get("AGENT_MEMORY_DATA_DIR", self.DEFAULT_DATA_DIR)
+        valid_embedders = {self.EMBEDDER_HASH, self.EMBEDDER_DASHSCOPE,
+                            self.EMBEDDER_OPENAI, self.EMBEDDER_LOCAL}
+        if embedder not in valid_embedders:
+            raise ValueError(f"embedder must be one of {valid_embedders}, got: {embedder}")
         self.embedder = embedder
         
         # Ensure directories exist
@@ -46,7 +50,9 @@ class Config:
     
     def _load_embedder_config(self):
         """Load embedder-specific configuration from environment."""
-        if self.embedder == self.EMBEDDER_DASHSCOPE:
+        if self.embedder == self.EMBEDDER_HASH:
+            self.embedding_dims = 1536  # HashEmbedder uses 1536-dim vectors
+        elif self.embedder == self.EMBEDDER_DASHSCOPE:
             self.dashscope_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
             self.embedding_dims = 1536
         elif self.embedder == self.EMBEDDER_OPENAI:

@@ -8,8 +8,19 @@ This is a simplified implementation that works without external LLM APIs.
 """
 
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+
+# ---- Module-level helper (DRY: extracted from compress()) ----
+
+def _parse_timestamp(meta: Dict[str, Any]) -> datetime:
+    """Parse created_at from memory meta dict; return datetime.min on failure."""
+    ts = meta.get("created_at", "")
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return datetime.min
 
 
 class L1LCMCompressor:
@@ -35,7 +46,9 @@ class L1LCMCompressor:
 
         Args:
             memories: List of memory dicts with 'id', 'content', 'meta' keys
-            query: Optional query to focus compression (currently unused; P2-3)
+            query: Optional query string to focus/prioritize relevant memories.
+                Memories whose content contains query keywords are boosted to
+                the front of each group (P2-3 fix: query param now used).
 
         Returns:
             Compressed context string
@@ -48,6 +61,20 @@ class L1LCMCompressor:
         # when mem.get() is called on non-dict objects
         memories = [m for m in memories if isinstance(m, dict)]
 
+        # P2-3 fix: compute optional query-relevance boost.
+        # Simple keyword-overlap approach: memories with more query tokens in
+        # their content get boosted within their importance tier.
+        query_toks: set[str] = set()
+        if query:
+            query_toks = set(re.findall(r"[\w]{2,}", query.lower()))
+
+        def _relevance_score(mem: Dict[str, Any]) -> int:
+            """Count how many query tokens appear in memory content."""
+            if not query_toks:
+                return 0
+            content_lower = mem.get("content", "").lower()
+            return sum(1 for tok in query_toks if tok in content_lower)
+
         # Group by importance
         important_memories = []
         normal_memories = []
@@ -59,19 +86,16 @@ class L1LCMCompressor:
             else:
                 normal_memories.append(mem)
 
-        # Sort by recency (most recent first)
-        def get_timestamp(mem):
-            meta = mem.get("meta", {})
-            ts = meta.get("created_at", "")
-            try:
-                return datetime.fromisoformat(ts)
-            except ValueError:
-                # P1-6 fix: catch only ValueError, not bare except: which
-                # would catch KeyboardInterrupt, SystemExit, AttributeError, etc.
-                return datetime.min
-
-        important_memories.sort(key=get_timestamp, reverse=True)
-        normal_memories.sort(key=get_timestamp, reverse=True)
+        # P2-2 fix: use module-level _parse_timestamp instead of duplicating
+        # the same nested function twice (DRY violation)
+        important_memories.sort(
+            key=lambda m: (_relevance_score(m), _parse_timestamp(m)),
+            reverse=True,
+        )
+        normal_memories.sort(
+            key=lambda m: (_relevance_score(m), _parse_timestamp(m)),
+            reverse=True,
+        )
 
         # Build output
         lines = []

@@ -52,7 +52,13 @@ def sign_file(file_path: Path, key: bytes) -> str:
 
     meta["hmac_signature"] = signature
     meta["hmac_algorithm"] = "HMAC-SHA256"
-    meta["signed_at"] = Path(file_path).stat().st_mtime
+    try:
+        meta["signed_at"] = Path(file_path).stat().st_mtime
+    except Exception:
+        # File deleted or inaccessible between read_bytes and stat (race condition).
+        # P2-11 fix: set signed_at to None and document the gap rather than
+        # silently omitting the field from what appears to be a complete meta.
+        meta["signed_at"] = None
 
     # Atomic write
     import tempfile
@@ -203,7 +209,10 @@ def verify_memory(memory_id: str, base_dir: Path, key: bytes) -> bool:
 
 def sign_all_memories(base_dir: Path, key: bytes) -> List[str]:
     """
-    对文件夹中所有记忆文件进行签名
+    对文件夹中所有记忆文件进行签名。
+
+    Writes to .meta.json (current API via sign_file) AND .sig (legacy API
+    via sign_memory) for full backward compatibility.
 
     Args:
         base_dir: 记忆存储目录
@@ -213,11 +222,15 @@ def sign_all_memories(base_dir: Path, key: bytes) -> List[str]:
         已签名的记忆 ID 列表
     """
     signed_ids: List[str] = []
+    base_path = Path(base_dir)
 
-    for md_file in base_dir.glob("*.md"):
+    for md_file in base_path.glob("*.md"):
         memory_id = md_file.stem
         try:
+            # Current API: write signature to .meta.json
             sign_file(md_file, key)
+            # Legacy API: also write .sig file for verify_memory() compatibility
+            sign_memory(memory_id, base_path, key)
             signed_ids.append(memory_id)
         except Exception:
             # 跳过无法签名的文件
@@ -269,21 +282,29 @@ def get_integrity_report(folder: Path, key: bytes) -> Dict:
 
     Returns:
         完整性报告字典
-    """
-    verification_results = verify_all_memories(folder, key)
 
-    total = len(verification_results)
-    valid = sum(1 for v in verification_results.values() if v)
-    invalid = total - valid
-    unsigned = sum(1 for v in verification_results.values() if not v)
+    P2-10 fix: use verify_folder (reads .meta.json) instead of
+    verify_all_memories (reads .sig files) — these were mismatched.
+    sign_all_memories -> .meta.json via sign_file.
+    verify_all_memories -> .sig files (legacy). The old code always
+    returned all-False because .sig files were never created.
+    """
+    ok, bad_files = verify_folder(folder, key)
+
+    # Count from .meta.json-based verification
+    root_path = Path(folder)
+    md_files = list(root_path.glob("*.md")) if root_path.is_dir() else []
+    total = len(md_files)
+    invalid = len(bad_files)
+    valid = total - invalid
 
     return {
         "total_memories": total,
         "valid_signatures": valid,
         "invalid_signatures": invalid,
-        "unsigned_memories": unsigned,
-        "is_verified": invalid == 0 and unsigned == 0,
-        "verification_details": verification_results,
+        "unsigned_memories": invalid,  # bad_files covers both unsigned and tampered
+        "is_verified": ok,
+        "bad_files": bad_files,
     }
 
 

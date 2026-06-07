@@ -1,9 +1,10 @@
 """
 Library Classifier - 图书馆分类系统
-基于关键词匹配的简单分类器，用于将记忆自动归类到层级路径
+基于关键词匹配的简单分类器，用于将记忆自动归类到层级路径。
 """
 
 import copy
+import functools
 import re
 from typing import Optional
 
@@ -83,24 +84,22 @@ class LibraryClassifier:
         else:
             self.dictionary = copy.deepcopy(CATEGORY_DICTIONARY)
 
-    def _tokenize(self, text: str) -> set[str]:
+    @functools.lru_cache(maxsize=512)
+    def _tokenize(self, text: str) -> tuple[str, ...]:
         """
-        简单分词：小写化 + 提取词
-        
-        Args:
-            text: 输入文本
-        
-        Returns:
-            分词后的词集合
+        简单分词：小写化 + 提取词。
+
+        P2-5 fix: cached with lru_cache — same text tokenized repeatedly
+        (e.g. re-classifying during add) hits cache O(1).
+        Returns tuple (not set) so it's hashable for caching.
         """
         text = text.lower()
-        # 提取英文单词和中文词（至少2个字符）
-        tokens = set()
+        tokens: list[str] = []
         # 英文词
-        tokens.update(re.findall(r'\b[a-z][a-z0-9_.-]*\b', text))
+        tokens.extend(re.findall(r'\b[a-z][a-z0-9_.-]*\b', text))
         # 中文字（至少2个连续字符）
-        tokens.update(re.findall(r'[\u4e00-\u9fff]{2,}', text))
-        return tokens
+        tokens.extend(re.findall(r'[\u4e00-\u9fff]{2,}', text))
+        return tuple(tokens)
 
     def _validate_path(self, path: str) -> str:
         """
@@ -158,23 +157,30 @@ class LibraryClassifier:
             return "未分类"
 
         tokens = self._tokenize(content)
+        tokens_set = set(tokens)  # O(1) lookups instead of O(n) tuple scan
+        content_lower = content.lower()
 
-        # 统计每个顶层类别的匹配分数
-        scores: dict[str, int] = {cat: 0 for cat in TOP_LEVEL_CATEGORIES}
+        # P2-8 fix: normalize scores by keyword list size to prevent bias toward
+        # categories with more keywords (e.g. '项目' has 20+ keywords, '偏好' has fewer).
+        # Use sqrt(num_keywords) dampening so large lists help but don't dominate.
+        scores: dict[str, float] = {cat: 0.0 for cat in TOP_LEVEL_CATEGORIES}
 
         for category, keywords in self.dictionary.items():
             # P1-5 fix: skip categories not in TOP_LEVEL_CATEGORIES to avoid KeyError
             if category not in TOP_LEVEL_CATEGORIES:
                 continue
+            cat_raw = 0.0
             for keyword in keywords:
                 kw_lower = keyword.lower()
-                # 检查关键词是否在 token 集合中（至少2字符的词才能tokenize）
-                if kw_lower in tokens:
-                    scores[category] += 2  # 精确匹配给 2 分
-                # P2-6 fix: remove elif so single-char keywords can still score
-                # via substring match (they can never be in tokens due to {2,} regex)
-                if kw_lower in content.lower():
-                    scores[category] += 1  # 包含给 1 分
+                # token 精确匹配（2分）
+                if kw_lower in tokens_set:
+                    cat_raw += 2.0
+                # 子串包含匹配（1分）
+                elif kw_lower in content_lower:
+                    cat_raw += 1.0
+            # Normalize: divide by sqrt(keyword_count)
+            if keywords:
+                scores[category] = cat_raw / (len(keywords) ** 0.5)
 
         # 找出得分最高的类别
         max_score = max(scores.values())
@@ -192,7 +198,7 @@ class LibraryClassifier:
             return "未分类"
 
         # 根据最高分类进行二级分类推断
-        sub_path = self._infer_subcategory(best_category, content, tokens)
+        sub_path = self._infer_subcategory(best_category, content, tokens_set)
 
         if sub_path:
             full_path = f"{best_category}/{sub_path}"
@@ -201,7 +207,7 @@ class LibraryClassifier:
 
         return self._validate_path(full_path)
 
-    def _infer_subcategory(self, top_category: str, content: str, tokens: set[str]) -> Optional[str]:
+    def _infer_subcategory(self, top_category: str, content: str, tokens) -> Optional[str]:
         """
         根据顶层类别推断二级或更深的子分类
         
@@ -220,7 +226,7 @@ class LibraryClassifier:
             # 尝试识别项目名称
             project_keywords = {
                 "石榴籽": ["石榴籽", "石榴"],
-                "SpectrAI": ["spectrai", "spectr-ai"],
+                "SpectrAI": ["spectrai", "spectr ai"],  # spectr-ai tokenizes as two tokens
                 "AgentMemory": ["agentmemory", "agent_memory", "memory"],
                 "OpenClaw": ["openclaw", "open_claw", "claw"],
             }
