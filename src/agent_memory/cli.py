@@ -1,17 +1,21 @@
-"""
-CLI 入口 - AgentMemory 命令行工具
-支持 add/search/list/show/delete/category/stats 子命令
+#!/usr/bin/env python3
+"""CLI 入口 - AgentMemory 命令行工具
+
+支持 add/search/list/show/delete/category/stats/sign/verify 子命令。
 """
 
 import argparse
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from . import __version__
 from .l4_files import L4FilesStore
 from .library import LibraryClassifier, TOP_LEVEL_CATEGORIES
+from .integrity import sign_file, verify_folder, sign_all_memories
 
 
 # 默认工作目录（memory 存储位置）
@@ -65,6 +69,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # stats 命令
     stats_parser = subparsers.add_parser("stats", help="显示统计信息")
+
+    # P0-4: sign 命令
+    sign_parser = subparsers.add_parser("sign", help="对记忆目录进行 HMAC 签名")
+    sign_parser.add_argument("dir", help="记忆存储目录")
+    sign_parser.add_argument("--key", required=True, help="签名密钥（字符串）")
+
+    # P0-4: verify 命令
+    verify_parser = subparsers.add_parser("verify", help="验证记忆目录的 HMAC 签名")
+    verify_parser.add_argument("dir", help="记忆存储目录")
+    verify_parser.add_argument("--key", required=True, help="签名密钥（字符串）")
 
     return parser
 
@@ -279,4 +293,229 @@ async def cmd_show(
     store = L4FilesStore(base_dir=base_dir)
 
     content = await store.load(mem_id)
-    me
+    if not content:
+        result = {"success": False, "message": f"Memory {mem_id} not found"}
+        _print_result(result, as_json)
+        return
+
+    meta = await store.get_meta(mem_id)
+
+    result = {
+        "success": True,
+        "id": mem_id,
+        "content": content,
+        "meta": meta or {},
+        "message": f"[{mem_id}]\n  {content}",
+    }
+
+    _print_result(result, as_json)
+
+
+async def cmd_delete(
+    mem_id: str,
+    base_dir: str,
+    as_json: bool
+) -> None:
+    """处理 delete 命令"""
+    store = L4FilesStore(base_dir=base_dir)
+
+    success = await store.delete(mem_id)
+
+    result = {
+        "success": success,
+        "id": mem_id,
+        "message": f"OK: Memory {mem_id} deleted" if success else f"Failed: Memory {mem_id} not found",
+    }
+
+    _print_result(result, as_json)
+
+
+async def cmd_category(
+    list_cats: bool,
+    show_all: bool,
+    base_dir: str,
+    as_json: bool
+) -> None:
+    """处理 category 命令"""
+    store = L4FilesStore(base_dir=base_dir)
+
+    if show_all:
+        result = {
+            "success": True,
+            "top_level_categories": TOP_LEVEL_CATEGORIES,
+        }
+        if not as_json:
+            result["message"] = "Top-level categories:\n  " + "\n  ".join(TOP_LEVEL_CATEGORIES)
+        _print_result(result, as_json)
+        return
+
+    if list_cats:
+        categories = store.get_categories()
+        result = {
+            "success": True,
+            "categories": categories,
+            "count": len(categories),
+        }
+        if not as_json:
+            result["message"] = f"Used categories ({len(categories)}):\n  " + "\n  ".join(categories) if categories else "No categories used yet"
+        _print_result(result, as_json)
+        return
+
+    # Default: show all
+    result = {"success": True, "message": "Use --list or --show-all"}
+    _print_result(result, as_json)
+
+
+async def cmd_stats(
+    base_dir: str,
+    as_json: bool
+) -> None:
+    """处理 stats 命令"""
+    store = L4FilesStore(base_dir=base_dir)
+
+    stats = store.get_stats()
+    categories = store.get_categories()
+
+    result = {
+        "success": True,
+        "stats": {
+            "memory_count": stats.get("memory_count", 0),
+            "total_size_bytes": stats.get("total_size_bytes", 0),
+            "category_count": len(categories),
+        },
+    }
+
+    _print_result(result, as_json)
+
+
+def cmd_sign(dir_path: str, key: str, as_json: bool) -> None:
+    """P0-4: 处理 sign 命令 — 对目录中所有记忆文件进行 HMAC 签名"""
+    root = Path(dir_path)
+    if not root.is_dir():
+        result = {"success": False, "message": f"Directory not found: {dir_path}"}
+        _print_result(result, as_json)
+        return
+
+    key_bytes = key.encode("utf-8") if isinstance(key, str) else key
+
+    try:
+        signed_ids = sign_all_memories(root, key_bytes)
+        result = {
+            "success": True,
+            "signed_count": len(signed_ids),
+            "signed_ids": signed_ids,
+            "message": f"OK: Signed {len(signed_ids)} memories in {dir_path}",
+        }
+        _print_result(result, as_json)
+    except Exception as e:
+        result = {"success": False, "message": f"Sign error: {e}"}
+        _print_result(result, as_json)
+
+
+def cmd_verify(dir_path: str, key: str, as_json: bool) -> None:
+    """P0-4: 处理 verify 命令 — 验证目录中所有记忆文件的 HMAC 签名"""
+    root = Path(dir_path)
+    if not root.is_dir():
+        result = {"success": False, "message": f"Directory not found: {dir_path}"}
+        _print_result(result, as_json)
+        return
+
+    key_bytes = key.encode("utf-8") if isinstance(key, str) else key
+
+    try:
+        ok, bad_files = verify_folder(root, key_bytes)
+        result = {
+            "success": ok,
+            "ok": ok,
+            "bad_files": bad_files,
+            "bad_file_count": len(bad_files),
+            "message": "VERIFIED: All signatures valid" if ok else f"FAILED: {len(bad_files)} files with bad signatures",
+        }
+        _print_result(result, as_json)
+    except Exception as e:
+        result = {"success": False, "message": f"Verify error: {e}"}
+        _print_result(result, as_json)
+
+
+def main() -> int:
+    """CLI 主入口"""
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # Build command arguments
+    kwargs = vars(args).copy()
+    command = kwargs.pop("command")
+    as_json = kwargs.pop("json", False)
+    base_dir = kwargs.pop("base_dir", DEFAULT_BASE_DIR)
+
+    if command == "sign":
+        cmd_sign(kwargs["dir"], kwargs["key"], as_json)
+        return 0
+
+    if command == "verify":
+        cmd_verify(kwargs["dir"], kwargs["key"], as_json)
+        return 0
+
+    # All other commands are async
+    if command == "add":
+        return asyncio.run(cmd_add(
+            content=kwargs["content"],
+            importance=kwargs.get("importance", 0.5),
+            tags=kwargs.get("tags"),
+            category=kwargs.get("category"),
+            source=kwargs.get("source", "cli"),
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "search":
+        return asyncio.run(cmd_search(
+            query=kwargs["query"],
+            limit=kwargs.get("limit", 5),
+            category=kwargs.get("category"),
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "list":
+        return asyncio.run(cmd_list(
+            category=kwargs.get("category"),
+            limit=kwargs.get("limit", 20),
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "show":
+        return asyncio.run(cmd_show(
+            mem_id=kwargs["id"],
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "delete":
+        return asyncio.run(cmd_delete(
+            mem_id=kwargs["id"],
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "category":
+        return asyncio.run(cmd_category(
+            list_cats=kwargs.get("list", False),
+            show_all=kwargs.get("show_all", False),
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    if command == "stats":
+        return asyncio.run(cmd_stats(
+            base_dir=base_dir,
+            as_json=as_json,
+        )) or 0
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

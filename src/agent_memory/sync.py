@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from .embedder import Embedder, get_embedder
+from .utils.injection import check_injection
 
 
 class SyncManager:
@@ -55,8 +56,17 @@ class SyncManager:
             
             if not created_at:
                 created_at = datetime.now().isoformat()
-            
-            metadata = {"source": source, "tags": tags}
+
+            # P0-2: 注入检测，写入 L3 meta 前调用
+            flagged, trust_score, matched_patterns = check_injection(content)
+
+            metadata = {
+                "source": source,
+                "tags": tags,
+                "flagged": flagged,
+                "trust_score": trust_score,
+                "flagged_patterns": matched_patterns,
+            }
             
             self.l3.upsert(
                 id=memory_id, content=content, vector=vector,

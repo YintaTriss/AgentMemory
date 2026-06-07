@@ -160,11 +160,41 @@ class DashScopeEmbedder(Embedder):
             return asyncio.run(self.embed(text))
 
 
-def get_embedder() -> Embedder:
-    """工厂函数：根据环境变量自动选择嵌入器"""
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-    if api_key:
+def get_embedder(backend: str = "auto") -> Embedder:
+    """
+    工厂函数：根据 backend 参数选择嵌入器
+
+    Args:
+        backend: "dashscope" | "auto"
+            - "dashscope": 强制使用 DashScope，要求 DASHSCOPE_API_KEY 必须存在
+            - "auto": 自动选择，有真实 key 则用 DashScope，否则 warn 并降级 HashEmbedder
+
+    Returns:
+        Embedder 实例
+
+    Raises:
+        RuntimeError: dashscope 模式下 API key 不存在时立即抛出
+    """
+    if backend == "dashscope":
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("DASHSCOPE_API_KEY not set")
         return DashScopeEmbedder(api_key=api_key)
+
+    if backend == "auto":
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        if api_key:
+            return DashScopeEmbedder(api_key=api_key)
+        # No real API key — warn and return HashEmbedder
+        import warnings
+        warnings.warn(
+            "[AgentMemory] No DASHSCOPE_API_KEY found, using HashEmbedder (offline mode). "
+            "Set DASHSCOPE_API_KEY to enable cloud embeddings.",
+            UserWarning,
+        )
+        return HashEmbedder(dim=384)
+
+    # Fallback for unknown backend
     return HashEmbedder(dim=384)
 
 
