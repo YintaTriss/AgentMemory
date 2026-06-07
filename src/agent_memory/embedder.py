@@ -216,31 +216,45 @@ def get_embedder(backend: str = "auto") -> Embedder:
     工厂函数：根据 backend 参数选择嵌入器
 
     Args:
-        backend: "dashscope" | "auto"
-            - "dashscope": 强制使用 DashScope，要求 DASHSCOPE_API_KEY 必须存在
-            - "auto": 自动选择，有真实 key 则用 DashScope，否则 warn 并降级 HashEmbedder
+        backend: "openai-compat" | "auto"
+            - "openai-compat": 使用 OpenAI-Compatible API（支持任意兼容 provider：
+              DashScope / Minimax / OpenAI / 本地 Embedding Server 等）
+              环境变量优先级：EMBEDDING_API_KEY > DASHSCOPE_API_KEY > OPENAI_API_KEY
+              base_url 优先级：EMBEDDING_BASE_URL > DASHSCOPE_BASE_URL（默认 https://dashscope.aliyuncs.com）
+            - "auto": 自动选择，有真实 key 则用 OpenAI-Compat 嵌入，否则降级 HashEmbedder
 
     Returns:
         Embedder 实例
 
     Raises:
-        RuntimeError: dashscope 模式下 API key 不存在时立即抛出
+        RuntimeError: openai-compat 模式下 API key 不存在时立即抛出
     """
-    if backend == "dashscope":
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    if backend == "openai-compat":
+        api_key = (
+            os.environ.get("EMBEDDING_API_KEY", "").strip()
+            or os.environ.get("DASHSCOPE_API_KEY", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
         if not api_key:
-            raise RuntimeError("DASHSCOPE_API_KEY not set")
+            raise RuntimeError(
+                "No API key found. Set EMBEDDING_API_KEY (recommended), "
+                "DASHSCOPE_API_KEY, or OPENAI_API_KEY environment variable."
+            )
         return DashScopeEmbedder(api_key=api_key)
 
     if backend == "auto":
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        api_key = (
+            os.environ.get("EMBEDDING_API_KEY", "").strip()
+            or os.environ.get("DASHSCOPE_API_KEY", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
         if api_key:
             return DashScopeEmbedder(api_key=api_key)
         # No real API key — warn and return HashEmbedder
         import warnings
         warnings.warn(
-            "[AgentMemory] No DASHSCOPE_API_KEY found, using HashEmbedder (offline mode). "
-            "Set DASHSCOPE_API_KEY to enable cloud embeddings.",
+            "[AgentMemory] No EMBEDDING_API_KEY found, using HashEmbedder (offline mode). "
+            "Set EMBEDDING_API_KEY to enable cloud embeddings (OpenAI-Compatible).",
             UserWarning,
         )
         return HashEmbedder(dim=384)

@@ -88,13 +88,13 @@
 
 ### 图书馆分类规范
 
-最多 4 层，用 `/` 分隔：
+最少 3 层（馆分类 / 书架分类 / 书分类，确保颗粒度），最大不设限，动态层数：
 
 ```
-Project/Shiliuzi/Corpus/NLLB-Training
-Project/Shiliuzi/Competition/Provincial
-AI/LLM/GPT/微调
-AI/Agent/记忆系统/VCP
+Project/Shiliuzi/Corpus/NLLB-Training              ✅ 最少 3 层
+Project/Shiliuzi/Corpus/NLLB-Training/2026-06       ✅ 可继续延伸（不设上限）
+AI/LLM/GPT/微调                                      ✅ 3 层
+AI/Agent/记忆系统/VCP                                ✅ 4 层
 ```
 
 ---
@@ -137,7 +137,8 @@ memory/
   "source": "manual",
   "importance": 0.8,
   "trust_score": 1.0,
-  "flagged": false
+  "flagged": false,
+  "signed_at": 1759804800.123
 }
 ```
 
@@ -196,7 +197,7 @@ pip install agentmemory[dev]     # 开发依赖（pytest 等）
 
 | 包 | 功能 | 默认 |
 |----|------|------|
-| `dashscope` | DashScope Embedding API | HashEmbedder（零依赖）|
+| `dashscope` | OpenAI-Compatible Embedding API（DashScope / Minimax / 任意兼容接口）| HashEmbedder（零依赖）|
 | `lancedb` | 向量数据库 | JSON fallback（零外部依赖）|
 
 
@@ -205,16 +206,19 @@ pip install agentmemory[dev]     # 开发依赖（pytest 等）
 ```python
 from agent_memory import MemoryManager, get_embedder
 
-# 默认（auto 模式）：无 DASHSCOPE_API_KEY → HashEmbedder（零依赖）
-#                    有 DASHSCOPE_API_KEY → DashScopeEmbedder（高语义质量）
+# 默认（auto 模式）：无 API Key → HashEmbedder（零依赖，离线可用）
+#                    有 EMBEDDING_API_KEY → OpenAI-Compatible 嵌入（任意兼容 provider）
 mm = MemoryManager()
 
-# 显式 DashScope（无 API Key 时立即抛 RuntimeError，不静默降级）
-mm = MemoryManager(embedder=get_embedder(backend="dashscope"))
+# 显式指定（无 API Key 时立即抛 RuntimeError，不静默降级）
+mm = MemoryManager(embedder=get_embedder(backend="openai-compat"))
 
 # 等价于默认 auto 模式（推荐写法）
 mm = MemoryManager(embedder=get_embedder())
 ```
+
+> **模型不绑定**：内部使用 OpenAI-Compatible API 格式，自动识别任意支持 `/v1/embeddings` 接口的 provider
+>（DashScope / Minimax / OpenAI / 本地 Embedding Server 等）。通过环境变量配置。
 
 ### 环境变量
 
@@ -222,8 +226,7 @@ mm = MemoryManager(embedder=get_embedder())
 |------|------|------|
 | `AGENT_MEMORY_DIR` | `memory` | 记忆存储目录 |
 | `AGENT_MEMORY_DATA_DIR` | `data` | 向量数据目录 |
-| `DASHSCOPE_API_KEY` | - | DashScope API（可选） |
-| `OPENAI_API_KEY` | - | OpenAI API（可选） |
+| `EMBEDDING_API_KEY` | - | OpenAI-Compatible Embedding API（可选，支持 DashScope / Minimax / 任意兼容接口） |
 
 ---
 
