@@ -1,212 +1,129 @@
 """
-AgentMemory v0.3 - L1 LCM Compressor
+AgentMemory v0.3 - L1 LCM (Long-term Context Memory) Compressor
+
 Compresses multiple memories into a concise context for AI prompts.
+Output format: narrative paragraphs + key facts list.
+
+This is a simplified implementation that works without external LLM APIs.
 """
 
-from __future__ import annotations
-
-import json
-import re
+from typing import List, Dict, Any
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
 
 
 class L1LCMCompressor:
-    """L1 Memory Compressor - rule-based summarization."""
+    """
+    L1 Memory Compressor
     
-    def __init__(self, llm_client=None, max_context_chars: int = 4000):
-        self.llm_client = llm_client
+    Compresses multiple memories into a concise summary for AI context.
+    Uses simple extractive summarization (no external API required).
+    """
+    
+    def __init__(self, max_context_chars: int = 4000):
+        """
+        Initialize L1 compressor.
+        
+        Args:
+            max_context_chars: Maximum characters in compressed output
+        """
         self.max_context_chars = max_context_chars
     
-    def compress(self, memory_ids: List[str], l4_store, l3_store) -> str:
+    def compress(self, memories: List[Dict[str, Any]], query: str = "") -> str:
         """
-        Compress multiple memories into a concise summary.
-        L4 store should have load_existing() method.
+        Compress multiple memories into a concise context.
+        
+        Args:
+            memories: List of memory dicts with 'id', 'content', 'meta'
+            query: Optional query to focus compression
+        
+        Returns:
+            Compressed context string
         """
-        if not memory_ids:
+        if not memories:
             return "No relevant memories found."
         
-        memories = []
-        for mid in memory_ids:
-            # Try load_existing first (returns dict), fallback to load (returns str)
-            if hasattr(l4_store, 'load_existing'):
-                mem = self._sync_load_existing(mid, l4_store)
-            else:
-                mem = self._sync_load(mid, l4_store)
-            
-            if mem:
-                memories.append({
-                    "id": mid,
-                    "content": mem.get("content", ""),
-                    "importance": mem.get("meta", {}).get("importance", 0.5),
-                    "category_path": mem.get("meta", {}).get("category_path", "general"),
-                    "tags": mem.get("meta", {}).get("tags", []),
-                    "created_at": mem.get("meta", {}).get("created_at", ""),
-                })
+        # Group by importance
+        important_memories = []
+        normal_memories = []
         
-        if not memories:
-            return "No memories found for the given IDs."
-        
-        # Group by category
-        categories = {}
         for mem in memories:
-            cat = mem.get("category_path", "general")
-            if cat not in categories:
-                categories[cat] = []
-            categories[cat].append(mem)
+            importance = mem.get("meta", {}).get("importance", 0.5)
+            if importance >= 0.7:
+                important_memories.append(mem)
+            else:
+                normal_memories.append(mem)
         
-        # Sort by importance within each category
-        for cat in categories:
-            categories[cat].sort(key=lambda x: x.get("importance", 0), reverse=True)
+        # Sort by recency (most recent first)
+        def get_timestamp(mem):
+            meta = mem.get("meta", {})
+            ts = meta.get("created_at", "")
+            try:
+                return datetime.fromisoformat(ts)
+            except:
+                return datetime.min
         
-        lines = ["# Relevant Memories", ""]
+        important_memories.sort(key=get_timestamp, reverse=True)
+        normal_memories.sort(key=get_timestamp, reverse=True)
         
-        # Key facts section (high importance)
-        important = [m for m in memories if m.get("importance", 0) >= 0.7]
-        if important:
-            important.sort(key=lambda x: x.get("importance", 0), reverse=True)
+        # Build output
+        lines = []
+        lines.append("# Relevant Memories")
+        lines.append("")
+        
+        # Add important memories first
+        if important_memories:
             lines.append("## Key Facts")
-            for mem in important[:10]:
-                tags = mem.get("tags", [])
+            for mem in important_memories[:10]:  # Limit to 10
+                content = mem.get("content", "")
+                category = mem.get("meta", {}).get("category", "general")
+                tags = mem.get("meta", {}).get("tags", [])
                 tags_str = f" [{', '.join(tags)}]" if tags else ""
-                lines.append(f"- {mem.get('content', '')}{tags_str}")
+                lines.append(f"- [{category}]{tags_str} {content}")
             lines.append("")
         
-        # Category sections
-        for cat, cat_memories in sorted(categories.items()):
-            if cat == "general" and not cat_memories:
-                continue
-            lines.append(f"## {cat}")
-            for mem in cat_memories[:5]:
-                lines.append(f"- {mem.get('content', '')}")
+        # Add normal memories
+        if normal_memories:
+            lines.append("## Background")
+            for mem in normal_memories[:20]:  # Limit to 20
+                content = mem.get("content", "")
+                category = mem.get("meta", {}).get("category", "general")
+                lines.append(f"- [{category}] {content}")
             lines.append("")
         
+        # Join and truncate if needed
         result = "\n".join(lines)
         if len(result) > self.max_context_chars:
             result = result[:self.max_context_chars - 100] + "\n\n... (truncated)"
+        
         return result
     
-    def _sync_load_existing(self, memory_id: str, l4_store) -> Optional[Dict[str, Any]]:
-        """Sync wrapper for async load_existing"""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Create a new loop in a thread if we're already in an async context
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, l4_store.load_existing(memory_id))
-                    return future.result()
-            else:
-                return asyncio.run(l4_store.load_existing(memory_id))
-        except Exception:
-            return None
-    
-    def _sync_load(self, memory_id: str, l4_store) -> Optional[Dict[str, Any]]:
-        """Sync wrapper for async load"""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, l4_store.load(memory_id))
-                    content = future.result()
-                    if content:
-                        return {"content": content, "meta": {}}
-                    return None
-            else:
-                content = asyncio.run(l4_store.load(memory_id))
-                if content:
-                    return {"content": content, "meta": {}}
-                return None
-        except Exception:
-            return None
-    
-    def compress_session(self, turns: List[Tuple[str, str]]) -> str:
-        """Summarize a conversation session."""
-        if not turns:
-            return "No conversation turns to summarize."
+    def extract_facts(self, content: str) -> List[str]:
+        """
+        Extract key facts from content (simple rule-based).
         
-        important_keywords = [
-            "决定", "决策", "选择", "重要", "必须", "应该",
-            "完成", "成功", "失败", "计划", "目标", "下周",
-            "记住", "别忘了", "下次", "之后",
-        ]
+        Args:
+            content: Text content
         
-        key_sentences = []
-        for i, (user, assistant) in enumerate(turns):
-            combined = f"{user} {assistant}"
-            sentences = self._split_sentences(combined)
-            for sent in sentences:
-                sent = sent.strip()
-                if len(sent) > 5:
-                    for kw in important_keywords:
-                        if kw in sent:
-                            key_sentences.append(f"[Turn {i+1}] {sent}")
-                            break
-        
-        lines = ["# Session Summary", ""]
-        if key_sentences:
-            lines.append("## Key Points")
-            for sent in key_sentences[:10]:
-                lines.append(f"- {sent}")
-            lines.append("")
-        else:
-            if turns:
-                first = turns[0]
-                lines.append(f"- Started: {first[0][:100]}")
-                if len(turns) > 1:
-                    last = turns[-1]
-                    lines.append(f"- Recent: {last[0][:100]}")
-            lines.append("")
-        return "\n".join(lines)
-    
-    def _split_sentences(self, text: str) -> List[str]:
-        """Split text into sentences using Chinese punctuation."""
-        text = text.replace("！", "。").replace("？", "。")
-        return [s.strip() for s in text.split("。") if s.strip()]
-    
-    def extract_facts(self, text: str) -> List[Dict[str, Any]]:
-        """Extract facts from text using rules."""
+        Returns:
+            List of extracted facts
+        """
         facts = []
-        sentences = self._split_sentences(text)
-        
-        type_keywords = {
-            "decision": ["决定", "决策", "选择", "采用", "放弃"],
-            "preference": ["喜欢", "偏好", "倾向", "不要", "想要"],
-            "project": ["项目", "开发", "完成", "进行中", "迭代"],
-            "learning": ["学习", "课程", "训练", "研究"],
-            "general": [],
-        }
-        
-        high_importance_kw = ["重要", "必须", "关键", "核心"]
-        medium_importance_kw = ["应该", "建议", "最好"]
+        sentences = content.replace("！", "。").replace("？", "。").split("。")
         
         for sent in sentences:
             sent = sent.strip()
-            if len(sent) < 5:
-                continue
-            
-            fact_type = "general"
-            for ftype, keywords in type_keywords.items():
-                if ftype != "general":
-                    for kw in keywords:
-                        if kw in sent:
-                            fact_type = ftype
-                            break
-                    if fact_type != "general":
-                        break
-            
-            importance = 0.5
-            for kw in high_importance_kw:
-                if kw in sent:
-                    importance = 0.9
-                    break
-            if importance == 0.5:
-                for kw in medium_importance_kw:
-                    if kw in sent:
-                        importance = 0.7
-                        break
-            
-            facts.append({"content": sent, "fact_type": fact_type, "impor
+            if len(sent) > 10:  # Skip very short sentences
+                # Simple heuristics for important sentences
+                if any(kw in sent for kw in ["应该", "必须", "重要", "决定", "计划", "完成", "成功", "失败"]):
+                    facts.append(sent)
+        
+        return facts[:5]  # Limit to 5 facts
+
+
+class FactType:
+    """Fact type constants"""
+    GENERAL = "general"
+    DECISION = "decision"
+    PREFERENCE = "preference"
+    PROJECT = "project"
+    LEARNING = "learning"
