@@ -467,11 +467,15 @@ async def cmd_reembed(
     as_json: bool,
 ) -> None:
     """处理 reembed 命令 — 重新向量化所有记忆"""
+async def cmd_reembed(
+    embedder_type: str,
+    base_dir: str,
+    as_json: bool,
+) -> None:
+    """处理 reembed 命令 — 重新向量化所有记忆"""
     import os
-    os.environ["AGENT_MEMORY_EMBEDDER"] = embedder_type
-
     store = L4FilesStore(base_dir=base_dir)
-    embedder = get_embedder()
+    embedder = get_embedder(backend=embedder_type)
 
     # L3 store 路径
     db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
