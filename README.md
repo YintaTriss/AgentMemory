@@ -105,7 +105,7 @@ AI/Agent/记忆系统/VCP
 |------|------|------|
 | `MemoryManager` | `manager.py` | 统一异步 API，add/get/delete/search/list/compress |
 | `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 三文件存储 |
-| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量语义搜索 |
+| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量搜索（ LanceDB 不可用时自动降级为 JSON Fallback）|
 | `L1LCMCompressor` | `l1_lcm.py` | 上下文压缩，FactType 实体提取 |
 | `SyncManager` | `sync.py` | L4 ↔ L3 双轨同步 |
 | `LibraryClassifier` | `library.py` | 4 层分类自动推断 |
@@ -163,6 +163,7 @@ portalocker.FileLock(f"{memory_id}.lock", timeout=5)
 | **注入检测** | `injection.py`：Unicode 规范化、角色扮演指令检测、越狱模式识别 |
 | **trust_score** | 同步前计算，< 0.2 拒绝写入 L3，≥ 0.2 且 flagged 时警告 |
 | **HMAC 验证** | `IntegrityVerifier`：记忆完整性签名，防篡改 |
+| **API Key 校验** | `DashScopeEmbedder.__init__` 立即校验，缺失抛 RuntimeError（架构强制要求）|
 
 ---
 
@@ -204,14 +205,15 @@ pip install agentmemory[dev]     # 开发依赖（pytest 等）
 ```python
 from agent_memory import MemoryManager, get_embedder
 
-# 默认：HashEmbedder（零依赖，无需 API Key）
+# 默认（auto 模式）：无 DASHSCOPE_API_KEY → HashEmbedder（零依赖）
+#                    有 DASHSCOPE_API_KEY → DashScopeEmbedder（高语义质量）
 mm = MemoryManager()
 
-# DashScope（阿里云百炼，有 API Key 时自动使用）
+# 显式 DashScope（无 API Key 时立即抛 RuntimeError，不静默降级）
 mm = MemoryManager(embedder=get_embedder(backend="dashscope"))
 
-# 强制使用 DashScope（无 key 时抛出异常）
-mm = MemoryManager(embedder=get_embedder(backend="dashscope"))
+# 等价于默认 auto 模式（推荐写法）
+mm = MemoryManager(embedder=get_embedder())
 ```
 
 ### 环境变量
@@ -301,6 +303,15 @@ python -m agent_memory.cli delete <memory_id>
 # 重新向量化（更换 embedder 类型时使用）
 python -m agent_memory.cli --json reembed --embedder hash
 
+# HMAC 签名（对新加入的文件夹进行签名）
+python -m agent_memory.cli sign memory/ --key "$(python -c \"import secrets; print(secrets.token_hex(32))\")"
+
+# HMAC 校验（验证文件夹完整性）
+python -m agent_memory.cli verify memory/ --key "your-key-here"
+
+# 重新分类（移动记忆的分类路径）
+python -m agent_memory.cli category <memory_id> "Project/Shiliuzi/Competition"
+
 # 启动 Web API 服务器
 python -m agent_memory.cli serve --port 8765
 ```
@@ -314,7 +325,7 @@ python -m agent_memory.cli serve --port 8765
 | `delete(memory_id)` | `bool` | 删除，L4 + L3 同时清除 |
 | `search(query, limit, category_path, mode)` | `list[dict]` | 向量语义搜索，支持 mode=vector/bm25/hybrid |
 | `list(category_path)` | `list[dict]` | 按分类列出 |
-| `compress_for_context(memory_ids)` | `str` | L1 压缩，生成 AI 可用摘要 |
+| `compress_for_context(memory_ids, query="")` | `str` | L1 压缩，query 参数增强同类别记忆优先级 |
 | `stats()` | `dict` | 统计：总数、分类、标签分布 |
 
 ---

@@ -48,8 +48,9 @@
                                    │ 自动同步
                                    ▼
                     ┌────────────────────────────────────┐
-                    │     L3 Vector (纯 JSON)       │
-                    │   + BM25 (可选, 混合检索)    │
+                    │     L3LanceDBStore (LanceDB)   │
+                    │   + BM25 混合检索              │
+                    │   (LanceDB 优先，JSON Fallback) │
                     └───────────────────────────────────┘
 ```
 
@@ -58,7 +59,7 @@
 | 层 | 名称 | 职责 | 实现位置 |
 |----|------|------|----------|
 | **L4** | Files | 唯一真实数据源（Single Source of Truth）。每个记忆 = 3 文件 | `src/agent_memory/l4_files.py` |
-| **L3** | Vector | 向量索引层。L4 → L3 **异步同步**，但 L3 可重建（从 L4 恢复） | `src/agent_memory/l3_vector.py` |
+| **L3** | Vector | 向量索引层。L4 → L3 **异步同步**，L3 可重建（从 L4 恢复） | `src/agent_memory/l3_lancedb.py` |
 | **L1** | LCM Compressor | 上下文压缩器。从 L4 读取 N 条记忆 → 压缩为适合 prompt 的摘要 | `src/agent_memory/l1_lcm.py` |
 
 **为什么去掉 L2 Graph-DB？**
@@ -79,10 +80,14 @@
 ```
 memory/
 ├── 7a3f9d2e-1b4c-4e8a-9f0a-1234567890ab.md          ← 原始内容（人类可读 Markdown）
-├── 7a3f9d2e-1b4c-4e8a-9f0a-1234567890ab.vec.json    ← 向量数据
+├── 7a3f9d2e-1b4c-4e8a-9f0a-1234567890ab.vec.json    ← 向量数据（每个记忆一个，随 .md 同目录）
 ├── 7a3f9d2e-1b4c-4e8a-9f0a-1234567890ab.meta.json   ← 元数据（分类 / 标签 / 来源）
 └── ...
 ```
+
+> **注意**：`*.vec.json` 文件由 L4FilesStore 随 `.md` 同目录管理（不是 central index）。
+  L3LanceDBStore 的 LanceDB 表 / JSON fallback 存储在 `data/lancedb/`（可配置），
+  记录向量引用 + 元数据，不重复存储内容文本。
 
 ### 3.2 `*.md`（内容本体）
 
@@ -131,14 +136,15 @@ memory/
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `id` | str (UUID4) | ✅ | 与文件名一致 |
-| `category` | str | ✅ | 图书馆分类路径（见第四章） |
+| `id` | str | ✅ | 与文件名一致 |
+| `category_path` | str | ✅ | 图书馆分类路径（见第四章） |
 | `tags` | list[str] | ❌ | 自由标签，用于 BM25 关键词索引 |
 | `source` | str | ✅ | 来源标识（agent 名 / 手动 / 导入） |
 | `importance` | float 0-1 | ❌ | 重要性评分（影响 L1 压缩保留） |
 | `created_at` | ISO 8601 | ✅ | 创建时间 |
 | `updated_at` | ISO 8601 | ✅ | 最后修改时间 |
-| `links` | list[UUID] | ❌ | 手动关联的其他记忆 ID（图谱信息用此替代 L2） |
+| `signed_at` | float | ❌ | HMAC 签名时间（文件 mtime），签名后存在 |
+| `links` | list[str] | ❌ | 手动关联的其他记忆 ID（图谱信息用此替代 L2） |
 
 ---
 
@@ -198,9 +204,27 @@ random_thought                   ❌ 不在 5 个顶层内
 ```python
 class Embedder(ABC):
     @property
-    def dim(self) -> int: ...
-    def embed(self, text: str) -> list[float]: ...
-    def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
+    @abstractmethod
+    def dim(self) -> int: pass
+
+    @property
+    def embed_sync(self) -> Callable[[str], list[float]]:
+        """同步版本的 embed 方法。
+        
+        HashEmbedder: sync 实现，直接返回 embed 属性。
+        DashScopeEmbedder: async 实现，包装为在子线程运行。
+        子类可覆盖此属性以提供正确的同步接口。
+        """
+        ...  # 默认实现处理 async/sync 兼容
+
+    @abstractmethod
+    def embed(self, text: str) -> list[float]:
+        """返回文本的嵌入向量。可能是 sync 或 async 实现。"""
+        pass
+
+    @abstractmethod
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        pass
 ```
 
 ### 5.2 实现
@@ -224,12 +248,24 @@ def get_embedder() -> Embedder:
 
 **安全要求（P0-1）**：DashScopeEmbedder 在 `__init__` 时必须**立即**校验 `DASHSCOPE_API_KEY`，缺失则**抛 `RuntimeError`**，**不允许**回退到 HashEmbedder（避免静默降级产生假向量）。
 
+```python
+class DashScopeEmbedder(Embedder):
+    def __init__(self, api_key: Optional[str] = None, ...):
+        self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
+        if not self._api_key:
+            raise RuntimeError(
+                "DashScopeEmbedder requires DASHSCOPE_API_KEY environment variable or "
+                "api_key argument. Do not instantiate DashScopeEmbedder without a valid key; "
+                "use get_embedder() instead (auto-selects HashEmbedder when no key)."
+            )
+        ...
+```
+
 ### 5.4 向量维度不一致的处理
 
 更换 Embedder 后，新写入的向量维度会变化。处理策略：
 
-- L3 JSON 索引按 `embedder` 名分文件：`vector_index_hash.json`, `vector_index_dashscope.json`。
-- 检索时只搜索当前 Embedder 对应的索引。
+- L3 向量按 **dims** 隔离：不同 Embedder 维度不同（Hash=384, DashScope=1024），检索时按当前 Embedder 的 dims 过滤。
 - 历史向量不重算（避免算力浪费），但提供 CLI `reembed` 命令批量重算。
 
 
@@ -244,11 +280,11 @@ def get_embedder() -> Embedder:
 | 类别 | 关键词 |
 |------|--------|
 | **决策** | 决定、决策、确定、敲定 |
-| **完成** | 完成、结束、done、finished |
-| **重要** | 重要、关键、critical、important |
-| **记住** | 记住、记下、备忘、remember |
-| **项目** | 项目、project、里程碑、milestone |
-| **进展** | 进展、进度、progress、更新 |
+| **完成** | 完成、结束、done、finished、搞定 |
+| **重要** | 重要、关键、critical、important、要紧 |
+| **记住** | 记住、记下、备忘、remember、memo |
+| **项目** | 项目、project、里程碑、milestone、sprint |
+| **进展** | 进展、进度、progress、更新、update、迭代 |
 
 **匹配规则**：关键词在文本中**子串匹配**（不分大小写）。命中 ≥ 1 个关键词即触发。
 
@@ -350,71 +386,81 @@ dependencies = [
 
 ### 8.3 不引入
 
-- ❌ `lancedb` —— L3 改用纯 JSON 索引（见 §9）
+- ✅ `lancedb` —— L3 向量存储首选（见 §9）
 - ❌ `sentence-transformers` —— 太大，按需 install
 - ❌ `chromadb / qdrant-client` —— 违反"无独立服务"原则
 - ❌ `pyyaml` —— 配置用 JSON / TOML
 
-> **修订说明**：原 v0.3 草案使用 LanceDB；实现阶段决定用**纯 JSON + numpy** 实现 L3 索引，零二进制依赖，详细见 §9。
+> **实现说明**：L3 以 LanceDB 为首选向量引擎，提供高性能向量搜索；
+  当 `lancedb` 不可用时（未安装或导入失败），自动降级为纯 JSON + numpy fallback，
+  零额外依赖即可运行。BM25 混合检索不依赖任何外部库。
 
 
 ---
 
 ## 九、L3 向量层实现细节
 
-### 9.1 为什么用纯 JSON 而非 LanceDB
+### 9.1 实现选择：LanceDB 优先 + JSON Fallback
 
-- LanceDB 是 Rust 内核 + Python 绑定，安装包大（~50MB），首次运行要下载 native lib。
-- v0.3 数据规模预期：个人 Agent < 10K 条记忆，文件夹总大小 < 100MB。
-- 10K 条 × 384 维 × 4 字节 ≈ 15MB JSON，可一次加载到内存。
-- 全量加载到内存后，numpy 矩阵乘法做余弦相似度 = 亚毫秒级。
+`L3LanceDBStore`（`l3_lancedb.py`）实现双模式：
+
+| 模式 | 触发条件 | 性能 | 依赖 |
+|------|----------|------|------|
+| **LanceDB** | `lancedb` 包已安装 | 高（Rust 内核 + 磁盘索引）| `lancedb>=0.1`, `pyarrow` |
+| **JSON Fallback** | LanceDB 不可用 | 中（内存矩阵，< 10K 条足够）| 仅 `numpy` |
+
+- LanceDB 是 Rust 内核 + Python 绑定，提供磁盘持久化向量索引。
+- v0.3 数据规模：个人 Agent < 10K 条记忆，JSON Fallback 完全够用。
+- **BM25 混合检索**在两种模式下均可用，纯 Python 实现，零额外依赖。
 
 ### 9.2 存储结构
 
+**per-memory 向量文件**（由 L4FilesStore 管理，与 `.md` 同目录）：
+
 ```
-data/
-├── vector_index.json          # 主索引：所有向量 + 元数据引用
-└── vector_index.lock          # 文件锁（并发保护）
+memory/
+├── <id>.md               ← L4 内容本体
+├── <id>.meta.json        ← L4 元数据
+└── <id>.vec.json         ← L4 向量数据（每个记忆一个）
 ```
 
-```json
-{
-  "embedder": "hash",
-  "dims": 384,
-  "memories": {
-    "7a3f9d2e-...": {
-      "vector": [0.012, ...],
-      "category": "项目/石榴籽/NLLB训练",
-      "tags": ["NLLB"],
-      "importance": 0.85
-    }
-  }
-}
+**LanceDB 表 / JSON Fallback 数据**（由 L3LanceDBStore 管理，在 `data/lancedb/`）：
+
+```
+data/lancedb/
+└── lance_db/             # LanceDB 数据库目录（本身是文件夹）
+    └── <table>           # 向量表：id / vector / content / metadata / category_path / importance
+
+# 或 JSON Fallback 模式：
+data/
+└── lancedb_fallback.json  # 所有向量 + 元数据的合并 JSON
 ```
 
 ### 9.3 检索算法
 
 ```python
-def search(query: str, top_k: int = 5) -> list[SearchResult]:
-    q_vec = embedder.embed(query)
-    # 1. 计算余弦相似度（向量化为矩阵乘法）
-    scores = matrix @ q_vec  # shape: (N,)
-    # 2. Top-K 索引
-    top_idx = np.argpartition(scores, -top_k)[-top_k:]
-    # 3. 过滤 importance 阈值（可选）
-    return [SearchResult(...) for i in top_idx]
+def search(query_vector, top_k=5, filter_expr=None):
+    # 1. LanceDB 模式：用 .search() 向量索引
+    #    或 JSON Fallback：用 numpy 矩阵乘法计算余弦相似度
+    results = l3_store.search(query_vector, top_k=top_k * 2, filter_expr=filter_expr)
+    # 2. Top-K 截断
+    return sorted(results, key=lambda r: r.score, reverse=True)[:top_k]
 ```
 
-**性能目标**：1 万条记忆，检索 < 10ms。
+**性能目标**：1 万条记忆，检索 < 10ms（LanceDB）/ < 50ms（JSON Fallback）。
 
-### 9.4 BM25 混合检索（已实现 ✅）
+### 9.4 BM25 混合检索
 
-`L3LanceDBStore` 新增两个方法：
+`L3LanceDBStore` 两个方法：
 
-- `search_bm25(query, top_k)` — 纯 Python BM25 索引（零额外依赖）
-- `search_hybrid(query_vector, query_text, top_k, alpha)` — 加权混合检索
+- `search_bm25(query, top_k, k1=1.2, b=0.75)` — 纯 Python BM25 索引，零额外依赖
+- `search_hybrid(query_vector, query_text, top_k, alpha=0.7)` — 加权混合检索
 
-默认 α = 0.7（向量权重），可通过 CLI `--mode hybrid` 或 API 调用。
+**BM25 参数**（可配置）：
+- `k1`：词频饱和参数（default 1.2），控制词频权重
+- `b`：文档长度归一化（default 0.75），控制长文档惩罚程度
+
+**混合权重**：α = 0.7（向量），1-α = 0.3（BM25），可通过 API 调整。
 
 ---
 
@@ -432,9 +478,12 @@ def search(query: str, top_k: int = 5) -> list[SearchResult]:
 
 加载文件夹时：
 
-1. 读取 `data/vector_index.json` 中的 `embedder` 字段。
-2. 当前环境的 Embedder 与之一致 → 直接使用。
+1. 读取任意 `*.vec.json` 中的 `dims` 字段（首次加载时检测）。
+2. 当前 Embedder 的 dims 与之一致 → 直接使用。
 3. 不一致 → 提示用户：是否重新向量化（`reembed`）？
+
+> 注意：`dims` 是 Embedder 的固有属性（HashEmbedder=384，DashScopeEmbedder=1024），
+  通过 dims 判断比字符串比对更可靠。
 
 ### 10.3 HMAC 签名（P0-4 安全要求）
 
@@ -562,7 +611,7 @@ def check_injection(text: str) -> list[str]:
 |----|------|------|----------|
 | ADR-001 | 删除 L2 Graph-DB | 过度设计；embedding + tags 已能表达关系 | Neo4j / Mem0 图层 |
 | ADR-002 | 双轨永远并存（无相变） | 简化心智模型；同步无歧义 | v0.2 的"热/冹"切换 |
-| ADR-003 | L3 用纯 JSON 而非 LanceDB | 零二进制依赖；10K 规模够用 | LanceDB / Chroma |
+| ADR-003 | L3 用 LanceDB（JSON Fallback）| 高性能向量检索；LanceDB 不可用时自动降级为纯 JSON，零额外依赖 | Chroma / Qdrant（需独立服务） |
 | ADR-004 | 最多 4 层分类 | 平衡表达力与认知负担 | 无限制 / 树形结构 |
 | ADR-005 | HashEmbedder 默认 | 零依赖即可工作；测试友好 | 必须 API 联网 |
 | ADR-006 | L4 写同步 / L3 写异步 | L4 是 SoT 不能丢；L3 可重建 | 全同步（慢） |
@@ -631,20 +680,20 @@ def get_embedder() -> Embedder:
     \"\"\"
     api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
     if api_key:
-        return DashScopeEmbedder(api_key=api_key)  # 里面会验证
+        return DashScopeEmbedder(api_key=api_key)  # 里面会立即校验，不满足抛 RuntimeError
     return HashEmbedder(dim=384)  # 明确、确定、零依赖
 
-# DashScopeEmbedder.__init__ 中的安全校验
+# DashScopeEmbedder.__init__ 中的安全校验（架构强制要求）
 class DashScopeEmbedder(Embedder):
     def __init__(self, api_key: Optional[str] = None, ...):
-        key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
-        if not key or not key.strip():
+        self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
+        if not self._api_key:
             raise RuntimeError(
-                "DashScopeEmbedder requires DASHSCOPE_API_KEY env var. "
-                "Do NOT fall back to HashEmbedder silently — mixed-dim vectors break retrieval."
+                "DashScopeEmbedder requires DASHSCOPE_API_KEY environment variable or "
+                "api_key argument. Do not instantiate DashScopeEmbedder without a valid key; "
+                "use get_embedder() instead (auto-selects HashEmbedder when no key)."
             )
-        self._api_key = key
-        ...
+        self._client = None  # 延迟初始化，首次 embed 时才创建 HTTP 客户端
 ```
 
 **验证**：
