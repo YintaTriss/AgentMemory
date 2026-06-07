@@ -16,7 +16,8 @@
 | **3 组件架构** | L4 文件持久化 · L3 向量语义搜索 · L1 上下文压缩
 
 > ⚠️ L4/L3/L1 是组件编号而非层级顺序。L2 在 v0.3 中被移除（原 Graph-DB 过度设计）。 |
-| **零依赖运行** | 默认 HashEmbedder，无需任何 API Key 或外部服务 |
+| **零 API Key** | 默认 HashEmbedder，无需任何 API Key 或外部服务 |
+| **轻量依赖** | 核心仅 8 个轻量运行时依赖（httpx/aiohttp/pydantic 等）|
 | **热插拔** | 整个记忆库是文件夹，复制即迁移 |
 | **并发安全** | `portalocker` + `msvcrt/fcntl`，Windows / Unix 均支持文件锁 |
 | **安全防护** | P0 注入检测 + Unicode 规范化 + trust_score 阈值 + HMAC 完整性验证 |
@@ -320,7 +321,7 @@ python -m agent_memory.cli delete <memory_id>
 
 ## 与其他系统对比
 
-| 系统 | 数据形态 | 索引方式 | 多 Agent | NAS 支持 | 零依赖 |
+| 系统 | 数据形态 | 索引方式 | 多 Agent | NAS 支持 | 无外部服务依赖 |
 |------|---------|---------|---------|---------|-------|
 | Hermes | 文件 | 无向量 | 共享工作空间 | 原生 | ✅ |
 | VCP | 文件 + 向量双轨 | Tag + 向量 | 共用文件夹 | SQLite 单文件 | ✅ |
@@ -337,7 +338,7 @@ python -m agent_memory.cli delete <memory_id>
 | 去掉相变机制 | 文件 + 向量永远是双轨 | VCP 验证：不需要相变 |
 | 并发写入控制 | portalocker 文件锁 | 多 Agent 并发写入场景 |
 | 记忆关联 | AI 自动推断 + 用户手动 | 平衡自动化和精确性 |
-| Embedder 默认 Hash | 零外部依赖 | 君子生非异也 |
+| Embedder 默认 Hash | 无需 API Key | 君子生非异也，善假于物也 |
 
 ---
 
