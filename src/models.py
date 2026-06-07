@@ -16,7 +16,7 @@ except ImportError:
 
 try:
     import ulid
-    ULIDType = ulid.ULID
+    ULIDType = getattr(ulid, 'ULID', ulid.ulid.__class__)
 except ImportError:
     # 兼容未安装 ulid 的环境
     ULIDType = str
@@ -25,7 +25,7 @@ except ImportError:
 def _default_ulid() -> str:
     """生成默认 ULID 字符串"""
     try:
-        return str(ulid.ULID())
+        return str(ulid.ulid())
     except Exception:
         import time
         return f"00{int(time.time() * 1000):017d}"

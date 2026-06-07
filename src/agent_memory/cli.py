@@ -10,6 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
 from . import __version__
@@ -159,7 +160,29 @@ async def cmd_add(
     }
 
     # 保存记忆
-    mem_id = await store.save(content, metadata)
+    import ulid
+    memory_id = ulid.ulid()
+    now = datetime.now().isoformat()
+    full_meta = {
+        "id": memory_id,
+        "created_at": now,
+        "updated_at": now,
+        **metadata,
+    }
+    mem_id = await store.save(memory_id, content, full_meta)
+
+    # 同步到 L3（向量存储）
+    import os as _os
+    _db_path = _os.path.join(_os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
+    _l3 = L3LanceDBStore(db_path=_db_path)
+    _embedder = get_embedder(backend="hash")
+    # P1-1 fix: use embed_sync if available (DashScopeEmbedder is async)
+    _embed_fn = _embedder.embed_sync if hasattr(_embedder, "embed_sync") else _embedder.embed
+    _vec = _embed_fn(content)
+    _l3.upsert(id=memory_id, content=content, vector=_vec, metadata=full_meta,
+               importance=full_meta.get("importance", 0.5),
+               category_path=full_meta.get("category_path", "general"),
+               created_at=full_meta.get("created_at"))
 
     result = {
         "success": True,
@@ -264,20 +287,22 @@ async def cmd_list(
     """处理 list 命令"""
     store = L4FilesStore(base_dir=base_dir)
 
+    # P0-2 fix: get_all_by_category() and get_meta() don't exist on L4FilesStore.
+    # Use list() + load_existing() instead.
+    mem_ids = store.list()
+    all_memories = []
+    for mid in mem_ids:
+        mem = await store.load_existing(mid)
+        if mem:
+            all_memories.append({"id": mid, **mem})
+
+    # 过滤分类
     if category:
-        all_memories = await store.get_all_by_category(category)
-        mem_ids = [m["id"] for m in all_memories]
-    else:
-        mem_ids = await store.list_all()
-        all_memories = []
-        for mid in mem_ids:
-            content = await store.load(mid)
-            meta = await store.get_meta(mid)
-            all_memories.append({"id": mid, "content": content, "meta": meta})
+        all_memories = [m for m in all_memories if m.get("meta", {}).get("category_path") == category]
 
     # 限制数量
-    mem_ids = mem_ids[:limit]
     all_memories = all_memories[:limit]
+    mem_ids = [m["id"] for m in all_memories]
 
     result = {
         "success": True,
@@ -286,8 +311,8 @@ async def cmd_list(
             {
                 "id": m["id"],
                 "preview": (m["content"][:60] + "...") if len(m["content"] or "") > 60 else m["content"],
-                "category": m["meta"].get("category_path") if m["meta"] else None,
-                "importance": m["meta"].get("importance") if m["meta"] else None,
+                "category": m.get("meta", {}).get("category_path"),
+                "importance": m.get("meta", {}).get("importance"),
             }
             for m in all_memories
         ],
@@ -316,20 +341,20 @@ async def cmd_show(
     """处理 show 命令"""
     store = L4FilesStore(base_dir=base_dir)
 
-    content = await store.load(mem_id)
-    if not content:
+    # P0-2 fix: use load_existing() which returns dict with 'content' and 'meta',
+    # NOT get_meta() which doesn't exist
+    mem = await store.load_existing(mem_id)
+    if not mem:
         result = {"success": False, "message": f"Memory {mem_id} not found"}
         _print_result(result, as_json)
         return
 
-    meta = await store.get_meta(mem_id)
-
     result = {
         "success": True,
         "id": mem_id,
-        "content": content,
-        "meta": meta or {},
-        "message": f"[{mem_id}]\n  {content}",
+        "content": mem.get("content", ""),
+        "meta": mem.get("meta", {}),
+        "message": f"[{mem_id}]\n  {mem.get('content', '')}",
     }
 
     _print_result(result, as_json)
@@ -467,12 +492,6 @@ async def cmd_reembed(
     as_json: bool,
 ) -> None:
     """处理 reembed 命令 — 重新向量化所有记忆"""
-async def cmd_reembed(
-    embedder_type: str,
-    base_dir: str,
-    as_json: bool,
-) -> None:
-    """处理 reembed 命令 — 重新向量化所有记忆"""
     import os
     store = L4FilesStore(base_dir=base_dir)
     embedder = get_embedder(backend=embedder_type)
@@ -481,7 +500,7 @@ async def cmd_reembed(
     db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
     l3_store = L3LanceDBStore(db_path=db_path)
 
-    all_ids = await store.list_all()
+    all_ids = store.list()
     if not all_ids:
         result = {"success": True, "message": "No memories to reembed", "count": 0}
         _print_result(result, as_json)
@@ -491,11 +510,15 @@ async def cmd_reembed(
     errors = 0
     for mem_id in all_ids:
         try:
-            content = await store.load(mem_id)
-            if not content:
+            # P1-1 fix: use embed_sync if embedder is async (DashScopeEmbedder)
+            # P0-2 fix: load_existing() returns dict with content+meta; load() returns str
+            _efn = embedder.embed_sync if hasattr(embedder, "embed_sync") else embedder.embed
+            record = await store.load_existing(mem_id)
+            if not record:
                 continue
-            meta = await store.get_meta(mem_id) or {}
-            vec = embedder.embed(content)
+            content = record.get("content", "")
+            meta = record.get("meta", {})
+            vec = _efn(content)
             l3_store.upsert(
                 id=mem_id,
                 content=content,

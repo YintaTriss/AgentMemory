@@ -108,7 +108,11 @@ class DashScopeEmbedder(Embedder):
 
     @property
     def api_key(self) -> str:
-        return self._api_key
+        # P1-5 fix: mask API key to prevent accidental leakage in logs/errors
+        key = self._api_key
+        if not key:
+            return ""
+        return key[:4] + "****" + key[-4:] if len(key) > 8 else "****"
 
     async def _get_client(self):
         if self._client is None:
@@ -138,14 +142,21 @@ class DashScopeEmbedder(Embedder):
             raise RuntimeError(f"DashScope API error: {response.status_code}")
         data = response.json()
         embeddings = data.get("data", [])
+        # P1-6 fix: embed_batch silently filling None entries with zeros is dangerous.
+        # If API returns fewer embeddings than requested, raise an error instead.
         result = [None] * len(texts)
         for item in embeddings:
             idx = item.get("index", 0)
             embedding = item.get("embedding", [])
             result[idx] = embedding
-        for i in range(len(result)):
-            if result[i] is None:
-                result[i] = [0.0] * self._dim
+        # Check for missing embeddings — fail loudly rather than corrupt data silently
+        missing = [i for i, v in enumerate(result) if v is None]
+        if missing:
+            raise RuntimeError(
+                f"DashScope API returned fewer embeddings than requested: "
+                f"missing indices {missing} of 0-{len(texts)-1}. "
+                f"Texts at missing indices: {[texts[i][:50] for i in missing]}"
+            )
         return result
 
     def embed_sync(self, text: str) -> list[float]:

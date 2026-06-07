@@ -315,7 +315,8 @@ class L4FilesStore:
         if not md_path.exists():
             return None
         
-        # Update access metadata (with file lock)
+        # P1-2 fix: access_count was incremented but NEVER WRITTEN BACK — silently lost.
+        # Now properly persist the updated access metadata.
         with _file_lock(self._get_lock_path(memory_id)):
             meta_path = self._get_file_paths(memory_id)["meta"]
             if meta_path.exists():
@@ -324,6 +325,8 @@ class L4FilesStore:
                         meta = json.load(f)
                     meta["access_count"] = meta.get("access_count", 0) + 1
                     meta["last_accessed"] = datetime.now().isoformat()
+                    with open(meta_path, "w", encoding="utf-8") as f:
+                        json.dump(meta, f, ensure_ascii=False, indent=2)
                 except Exception:
                     pass
         

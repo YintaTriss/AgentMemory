@@ -69,8 +69,9 @@ class MemoryManager:
         query_vector = self.embedder.embed(query)
         filter_expr = None
         if category_path:
-            # LanceDB filter expression for exact match
-            filter_expr = f"category_path = '{category_path}'"
+            # P1-3 fix: escape single quotes in category_path to prevent SQL injection
+            safe_cat = category_path.replace("'", "''")
+            filter_expr = f"category_path = '{safe_cat}'"
         results = self.l3.search(query_vector, top_k=limit, filter_expr=filter_expr)
         enriched = []
         for r in results:
@@ -135,7 +136,14 @@ class MemoryManager:
         return deleted
     
     async def compress_for_context(self, memory_ids: List[str]) -> str:
-        return self.l1.compress(memory_ids, self.l4, self.l3)
+        # P0-3 fix: L1LCMCompressor.compress() expects List[Dict] with 'content'/'meta' keys,
+        # not List[str] memory IDs. Also only accepts (memories, query) — not extra l4/l3 args.
+        memories = []
+        for mid in memory_ids:
+            mem = await self.l4.load_existing(mid)
+            if mem:
+                memories.append(mem)
+        return self.l1.compress(memories, query="")
     
     async def stats(self) -> Dict[str, Any]:
         if self._stats_cache and self._stats_timestamp:

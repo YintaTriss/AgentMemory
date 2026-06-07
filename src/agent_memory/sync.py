@@ -22,6 +22,12 @@ class SyncManager:
         self.l4 = l4_store
         self.l3 = l3_store
         self.embedder = embedder or get_embedder()
+        # P1-1 fix: use embed_sync for DashScopeEmbedder (async embed),
+        # fall back to regular embed for HashEmbedder (sync)
+        if hasattr(self.embedder, 'embed_sync'):
+            self._embed_fn = self.embedder.embed_sync
+        else:
+            self._embed_fn = self.embedder.embed
         self.memory_dir = Path(memory_dir)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         
@@ -30,30 +36,30 @@ class SyncManager:
         ]
     
     async def sync_one(self, memory_id: str) -> bool:
-        # P0-2 fix: l4.load() is async, must await
+        # P0-1 fix: l4.load_existing() returns dict with 'content' and 'meta',
+        # NOT l4.load() which returns Optional[str]
         try:
-            mem = await self.l4.load(memory_id)
+            mem = await self.l4.load_existing(memory_id)
             if not mem:
                 print(f"[Sync] Memory {memory_id} not found in L4")
                 return False
 
             content = mem.get("content", "")
-            meta = mem.get("meta")
+            meta = mem.get("meta", {})
 
             if not content:
                 print(f"[Sync] Memory {memory_id} has no content")
                 return False
 
-            vector = self.embedder.embed(content)
+            # P1-1 fix: use _embed_fn which handles sync/async embedder correctly
+            vector = self._embed_fn(content)
 
-            # Handle meta as dict (from l4.load() returns dict with 'meta' key)
-            if meta is None:
-                meta = {}
-            source = meta.get("source", "manual") if isinstance(meta, dict) else getattr(meta, "source", "manual")
-            tags = meta.get("tags", []) if isinstance(meta, dict) else getattr(meta, "tags", [])
-            importance = meta.get("importance", 0.5) if isinstance(meta, dict) else getattr(meta, "importance", 0.5)
-            category_path = meta.get("category_path", "general") if isinstance(meta, dict) else getattr(meta, "category_path", getattr(meta, "category", "general"))
-            created_at = meta.get("created_at", "") if isinstance(meta, dict) else getattr(meta, "created_at", "")
+            # meta is already a dict from load_existing (P0-1 fix)
+            source = meta.get("source", "manual")
+            tags = meta.get("tags", [])
+            importance = meta.get("importance", 0.5)
+            category_path = meta.get("category_path", "general")
+            created_at = meta.get("created_at", "")
 
             if not created_at:
                 created_at = datetime.now().isoformat()
@@ -101,28 +107,23 @@ class SyncManager:
         return results
     
     async def sync_by_category(self, category_path: str) -> int:
-        # P0-2 fix: l4.load() is async, must await
+        # P0-1 fix: use load_existing instead of load (which returns str not dict)
         memory_ids = self.l4.list()
         synced = 0
         for mid in memory_ids:
-            mem = await self.l4.load(mid)
+            mem = await self.l4.load_existing(mid)
             if mem:
-                meta = mem.get("meta")
-                if meta:
-                    # Check both dict and object access
-                    if isinstance(meta, dict):
-                        cat = meta.get("category_path", "")
-                    else:
-                        cat = getattr(meta, "category_path", getattr(meta, "category", ""))
-                    if cat == category_path:
-                        if await self.sync_one(mid):
-                            synced += 1
+                meta = mem.get("meta", {})
+                cat = meta.get("category_path", "")
+                if cat == category_path:
+                    if await self.sync_one(mid):
+                        synced += 1
         return synced
     
     async def auto_sync_check(self, memory_id: str) -> bool:
-        # P0-2 fix: l4.load() is async, must await
+        # P0-1 fix: use load_existing instead of load (which returns str not dict)
         try:
-            mem = await self.l4.load(memory_id)
+            mem = await self.l4.load_existing(memory_id)
             if not mem:
                 return False
             content = mem.get("content", "")
