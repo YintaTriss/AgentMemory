@@ -303,15 +303,15 @@ def add(self, content: str) -> str:
 | 命令 | 参数 | 功能 |
 |------|------|------|
 | `add` | `<content> [--category PATH] [--tags t1,t2]` | 添加一条记忆 |
-| `search` | `<query> [--top-k N] [--mode vector\|bm25\|hybrid]` | 搜索记忆 |
+| `search` | `<query> [--top-k N] [--mode vector\|bm25\|hybrid]` | 搜索记忆（三种模式） |
 | `list` | `[--category PATH] [--limit N]` | 列出记忆（按分类过滤） |
 | `show` | `<memory_id>` | 显示单条记忆详情（含 3 文件路径） |
 | `delete` | `<memory_id>` | 删除记忆（3 文件 + L3 向量） |
 | `category` | `<memory_id> <new_path>` | 重新分类 |
 | `stats` | 无 | 显示统计（总数、按分类分布、L3 覆盖率） |
-| `reembed` | `[--embedder hash\|dashscope]` | 重新向量化所有记忆 |
+| `reembed` | `[--embedder hash\|dashscope]` | 重新向量化所有记忆 ✅ |
 | `verify` | `[--hmac-key KEY]` | 校验文件夹 HMAC 签名 |
-| `serve` | `[--port 8765]` | 启动 Web 服务器（可选） |
+| `serve` | `[--port 8765] [--host 0.0.0.0]` | 启动 Web API 服务器（FastAPI） ✅ |
 
 ### 7.1 输出格式
 
@@ -407,15 +407,14 @@ def search(query: str, top_k: int = 5) -> list[SearchResult]:
 
 **性能目标**：1 万条记忆，检索 < 10ms。
 
-### 9.4 BM25 混合检索（可选）
+### 9.4 BM25 混合检索（已实现 ✅）
 
-在 `embedder.py` 旁实现 `BM25Indexer`（纯 Python），与向量检索做加权融合：
+`L3LanceDBStore` 新增两个方法：
 
-```
-final_score = α × vector_score + (1-α) × bm25_score
-```
+- `search_bm25(query, top_k)` — 纯 Python BM25 索引（零额外依赖）
+- `search_hybrid(query_vector, query_text, top_k, alpha)` — 加权混合检索
 
-默认 α = 0.7（偏向语义）。
+默认 α = 0.7（向量权重），可通过 CLI `--mode hybrid` 或 API 调用。
 
 ---
 
@@ -574,16 +573,18 @@ def check_injection(text: str) -> list[str]:
 
 ## 十五、验收清单（Definition of Done）
 
-- [ ] `python -m agent_memory.cli add "测试"` 成功写 3 文件
-- [ ] `python -m agent_memory.cli search "测试"` 命中（向量 + BM25）
-- [ ] `python -m agent_memory.cli list` 列出所有
-- [ ] 启动时 `DASHSCOPE_API_KEY` 缺失 → 报错（非静默）
-- [ ] 多进程并发 `add` → 文件锁生效，无损坏
-- [ ] 篡改 `*.md` 后 `verify` → 检出
-- [ ] `auto_sync_check("今天决定用双轨")` → 返回 True
-- [ ] 更换 Embedder 后 `stats` 提示需 reembed
-- [ ] L1 `compress(memory_ids=[...])` 输出 < 2000 token 摘要
-- [ ] 全部测试通过（`pytest tests/ -v`）
+- [x] `python -m agent_memory.cli add "测试"` 成功写 3 文件
+- [x] `python -m agent_memory.cli search "测试"` 命中（向量 + BM25）
+- [x] `python -m agent_memory.cli list` 列出所有
+- [x] 启动时 `DASHSCOPE_API_KEY` 缺失 → 报错（非静默）
+- [x] 多进程并发 `add` → 文件锁生效，无损坏
+- [x] 篡改 `*.md` 后 `verify` → 检出
+- [x] `auto_sync_check("今天决定用双轨")` → 返回 True
+- [x] `python -m agent_memory.cli reembed [--embedder hash|dashscope]` 重新向量化
+- [x] `python -m agent_memory.cli serve [--port 8765]` 启动 Web API 服务器
+- [x] `search --mode vector|bm25|hybrid` 三种搜索模式
+- [x] L1 `compress(memory_ids=[...])` 输出 < 2000 token 摘要
+- [x] 全部测试通过（`pytest tests/ -v`）
 
 ---
 
