@@ -4,7 +4,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-[![Core Dependencies](https://img.shields.io/badge/Core%20Deps-8-green.svg)](#dependencies)
 
 ---
 
@@ -17,11 +16,9 @@
 
 > ⚠️ L4/L3/L1 是组件编号而非层级顺序。L2 在 v0.3 中被移除（原 Graph-DB 过度设计）。 |
 | **零 API Key** | 默认 HashEmbedder，无需任何 API Key 或外部服务 |
-| **轻量依赖** | 核心仅 8 个轻量运行时依赖（httpx/aiohttp/pydantic 等）|
 | **热插拔** | 整个记忆库是文件夹，复制即迁移 |
 | **并发安全** | `portalocker` + `msvcrt/fcntl`，Windows / Unix 均支持文件锁 |
 | **安全防护** | P0 注入检测 + Unicode 规范化 + trust_score 阈值 + HMAC 完整性验证 |
-| **多框架适配** | openclaw / Claude Code / CrewAI / LangChain / OpenAI Agents |
 
 ---
 
@@ -112,7 +109,7 @@ AI/Agent/记忆系统/VCP
 | `L1LCMCompressor` | `l1_lcm.py` | 上下文压缩，FactType 实体提取 |
 | `SyncManager` | `sync.py` | L4 ↔ L3 双轨同步 |
 | `LibraryClassifier` | `library.py` | 4 层分类自动推断 |
-| `Embedder` | `embedder.py` | HashEmbedder（零依赖）/ DashScopeEmbedder / 本地模型 |
+| `Embedder` | `embedder.py` | HashEmbedder（无需 API）/ DashScopeEmbedder（需 API Key）|
 | `IntegrityVerifier` | `integrity.py` | HMAC 签名验证 |
 
 ---
@@ -169,18 +166,6 @@ portalocker.FileLock(f"{memory_id}.lock", timeout=5)
 
 ---
 
-## 适配器生态
-
-| 适配器 | 文件 | 框架 |
-|--------|------|------|
-| OpenClaw | `adapters/openclaw.py` | OpenClaw Agent |
-| Claude Code | `adapters/claude_code.py` | Anthropic Claude Code |
-| CrewAI | `adapters/crewai.py` | CrewAI Agents |
-| LangChain | `adapters/langchain.py` | LangChain |
-| OpenAI Agents | `adapters/openai_agents.py` | OpenAI Agents SDK |
-
----
-
 ## 安装
 
 ```bash
@@ -190,37 +175,42 @@ pip install -e .
 
 ### 依赖项
 
-**核心依赖（8 个）：**
+**运行时依赖（pyproject.toml）：**
 
 ```
-httpx, aiofiles, portalocker,
-pydantic, aiofiles.os, json, pathlib, datetime
+httpx>=0.25.0    # HTTP 客户端
+aiofiles>=23.0.0 # 异步文件操作
+mcp>=1.0         # MCP 协议
+aiohttp>=3.9.0   # 异步 HTTP
+pydantic>=2.5    # 数据验证
+python-ulid>=1.0 # ID 生成
+fastapi>=0.110.0 # 可选：Web API
+uvicorn>=0.27.0  # 可选：ASGI 服务器
 ```
 
-**可选依赖：**
+**portalocker**（文件锁）：已内置条件导入，未安装时自动回退到 msvcrt/fcntl。
+
+**Embedding 可选：**
 
 | 包 | 功能 | 默认 |
 |----|------|------|
-| `lancedb` | 向量数据库 | 纯 JSON 回退 |
+| `lancedb` | 向量数据库 | HashEmbedder（纯 JSON 向量）|
 | `dashscope` | DashScope Embedding API | HashEmbedder 零依赖 |
-| `bge-large-zh` | 本地 Embedding 模型 | HashEmbedder 零依赖 |
+
 
 ### Embedder 选择
 
 ```python
-from agent_memory import MemoryManager
+from agent_memory import MemoryManager, get_embedder
 
 # 默认：HashEmbedder（零依赖，无需 API Key）
 mm = MemoryManager()
 
-# OpenAI Embedding
-mm = MemoryManager(embedder="openai")
+# DashScope（阿里云百炼，有 API Key 时自动使用）
+mm = MemoryManager(embedder=get_embedder(backend="dashscope"))
 
-# DashScope（阿里）
-mm = MemoryManager(embedder="dashscope")
-
-# 本地模型（bge-large-zh）
-mm = MemoryManager(embedder="local")
+# 强制使用 DashScope（无 key 时抛出异常）
+mm = MemoryManager(embedder=get_embedder(backend="dashscope"))
 ```
 
 ### 环境变量
