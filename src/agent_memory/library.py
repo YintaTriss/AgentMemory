@@ -53,26 +53,26 @@ class LibraryClassifier:
     """
     图书馆分类器
     基于关键词匹配将内容归类到层级路径，动态层数范围 [min_depth, max_depth]。
-    默认最少 2 层（顶层 + 子层），最多 4 层。
+    默认最少 3 层（馆分类 / 书架分类 / 书分类），最大不设限（动态层数）。
     """
 
     def __init__(
         self,
-        min_depth: int = 2,
-        max_depth: int = 4,
+        min_depth: int = 3,
+        max_depth: Optional[int] = None,
         dictionary: Optional[dict[str, list[str]]] = None,
     ):
         """
         初始化分类器
 
         Args:
-            min_depth: 最少分类深度（默认 2 层，顶层 + 子层）
-            max_depth: 最大分类深度（默认 4 层）
+            min_depth: 最少分类深度（默认 3 层：馆分类 / 书架分类 / 书分类）
+            max_depth: 最大分类深度（默认 None = 不设限，动态层数）
             dictionary: 可选的分类词典，格式为 {分类名: [关键词列表]}
         """
         if min_depth < 1:
             raise ValueError("min_depth must be >= 1")
-        if max_depth < min_depth:
+        if max_depth is not None and max_depth < min_depth:
             raise ValueError("max_depth must be >= min_depth")
         self.min_depth = min_depth
         self.max_depth = max_depth
@@ -132,8 +132,8 @@ class LibraryClassifier:
         if parts[0] not in TOP_LEVEL_CATEGORIES:
             parts.insert(0, "未分类")
 
-        # 限制最大深度
-        if len(parts) > self.max_depth:
+        # 限制最大深度（max_depth=None 时不限制）
+        if self.max_depth is not None and len(parts) > self.max_depth:
             parts = parts[:self.max_depth]
 
         # 补足最小深度（不够层时用"通用"填充）
