@@ -274,8 +274,14 @@ asyncio.run(main())
 # 添加记忆
 python -m agent_memory.cli add "测试记忆" --category "test" --tags "demo"
 
-# 语义搜索
+# 语义搜索（默认 vector 模式）
 python -m agent_memory.cli search "测试"
+
+# 关键词搜索（BM25）
+python -m agent_memory.cli search "测试" --mode bm25
+
+# 混合搜索（语义 + 关键词融合）
+python -m agent_memory.cli search "测试" --mode hybrid
 
 # 列出所有
 python -m agent_memory.cli list
@@ -289,11 +295,14 @@ python -m agent_memory.cli list --category "Project/Shiliuzi"
 # 统计
 python -m agent_memory.cli stats
 
-# 同步 L4 → L3
-python -m agent_memory.cli sync
-
 # 删除
 python -m agent_memory.cli delete <memory_id>
+
+# 重新向量化（更换 embedder 类型时使用）
+python -m agent_memory.cli --json reembed --embedder hash
+
+# 启动 Web API 服务器
+python -m agent_memory.cli serve --port 8765
 ```
 
 ### MemoryManager API
@@ -303,7 +312,7 @@ python -m agent_memory.cli delete <memory_id>
 | `add(content, category_path, tags, importance)` | `str` (memory_id) | 添加记忆，L4 + L3 双轨写入 |
 | `get(memory_id)` | `dict \| None` | 按 ID 获取 |
 | `delete(memory_id)` | `bool` | 删除，L4 + L3 同时清除 |
-| `search(query, limit, category_path)` | `list[dict]` | 向量语义搜索 |
+| `search(query, limit, category_path, mode)` | `list[dict]` | 向量语义搜索，支持 mode=vector/bm25/hybrid |
 | `list(category_path)` | `list[dict]` | 按分类列出 |
 | `compress_for_context(memory_ids)` | `str` | L1 压缩，生成 AI 可用摘要 |
 | `stats()` | `dict` | 统计：总数、分类、标签分布 |
