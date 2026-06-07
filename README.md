@@ -7,32 +7,23 @@
 
 ---
 
-## 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| **双轨检索** | Embedding 向量（语义）+ 图书馆分类（精确），同时生效，永不取舍 |
-| **3 组件架构** | L4 文件持久化 · L3 向量语义搜索 · L1 上下文压缩
-
-> ⚠️ L4/L3/L1 是组件编号而非层级顺序。L2 在 v0.3 中被移除（原 Graph-DB 过度设计）。 |
-| **零 API Key** | 默认 HashEmbedder，无需任何 API Key 或外部服务 |
-| **热插拔** | 整个记忆库是文件夹，复制即迁移 |
-| **并发安全** | `portalocker` + `msvcrt/fcntl`，Windows / Unix 均支持文件锁 |
-| **安全防护** | P0 注入检测 + Unicode 规范化 + trust_score 阈值 + HMAC 完整性验证 |
-
----
-
 ## 设计哲学：记忆如图书馆
 
 > **书籍本身不变，但目录系统让查找变得精确。**
 
-同一份记忆同时存在于两条轨道，永远双轨并存：
+传统记忆系统的核心矛盾：**语义搜索（模糊匹配）与精确分类（按领域筛选）只能二选一**。
+
+AgentMemory 的答案：**双轨并存，永不取舍。**
+
+同一份记忆同时存在于两条轨道：
 
 ```
 同一份记忆：
-├─ 图书馆分类轨（.md 本体 + meta.json 元数据）→ 精确查找，管理边界
-└─ Embedding 向量轨（vec.json）→ 语义搜索，模糊匹配
+├─ 图书馆分类轨（.md 本体 + .meta.json 元数据）→ 精确查找，管理边界
+└─ Embedding 向量轨（.vec.json）→ 语义搜索，模糊匹配
 ```
+
+**颗粒度保证**：最少 3 层分类（馆分类 / 书架分类 / 书分类），确保每一份记忆都能被精确归类，最大层数不设限，按需延伸。
 
 ---
 
@@ -40,14 +31,13 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                     宿主应用 (Agent / CLI)                   │
+│                     宿主应用 (Agent / CLI / Web API)        │
 └────────────────────────────┬─────────────────────────────────┘
                              │
                              ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  MemoryManager（统一异步 API）                                │
-│  ├─ add() / get() / delete() / search() / list()          │
-│  └─ compress_for_context() → L1 压缩注入 prompt              │
+│  add() / get() / delete() / search() / list() / compress() │
 └────────────────────────────┬─────────────────────────────────┘
                              │
           ┌──────────────────┴──────────────────┐
@@ -60,15 +50,15 @@
 │  memory/<id>.meta   │              │  (语义相似度检索)        │
 │  memory/<id>.vec.json              │                         │
 └─────────────────────┘              └─────────────────────────┘
-          │
-          ▼ (读取时)
-┌─────────────────────┐
-│   L1LCMCompressor   │
-│   （上下文压缩）      │
-│                     │
-│  实体提取 → 摘要     │
-│  → AI Context 注入   │
-└─────────────────────┘
+          │                                      │
+          ▼ (读取时)                              │
+┌─────────────────────┐              ┌─────────────────────────┐
+│   L1LCMCompressor   │              │   BM25 混合检索          │
+│   （上下文压缩）      │              │   (纯 Python, 零依赖)    │
+│                     │              │                         │
+│  实体提取 → 摘要     │              │  k1=1.2, b=0.75         │
+│  → AI Context 注入   │              │  α=0.7 (向量/BM25)       │
+└─────────────────────┘              └─────────────────────────┘
 ```
 
 ### 三层职责
@@ -76,8 +66,11 @@
 | 层级 | 组件 | 职责 |
 |------|------|------|
 | **L4** | `L4FilesStore` | `.md` 内容 + `.meta.json` 元数据 + `.vec.json` 向量，文件系统持久化 |
-| **L3** | `L3LanceDBStore` | LanceDB 向量搜索（或 JSON fallback），支持按 category_path / tags 过滤 |
-| **L1** | `L1LCMCompressor` | 记忆压缩为摘要 + 实体列表，注入 AI prompt 时使用 |
+| **L3** | `L3LanceDBStore` | LanceDB 向量搜索（不可用时自动降级为纯 JSON + numpy），支持 BM25 混合检索 |
+| **L1** | `L1LCMCompressor` | 记忆压缩为摘要 + 实体列表，注入 AI prompt 时使用，支持 query 相关性增强 |
+| **L3** | `SyncManager` | L4 ↔ L3 双轨同步，自动同步关键词检测，portalocker 文件锁 |
+| **L3** | `LibraryClassifier` | 5 大顶层类自动分类，关键词归一化评分，缓存分词 |
+| **L3** | `IntegrityVerifier` | HMAC-SHA256 文件完整性签名，防篡改 |
 
 ### 双轨检索
 
@@ -91,10 +84,10 @@
 最少 3 层（馆分类 / 书架分类 / 书分类，确保颗粒度），最大不设限，动态层数：
 
 ```
-Project/Shiliuzi/Corpus/NLLB-Training              ✅ 最少 3 层
-Project/Shiliuzi/Corpus/NLLB-Training/2026-06       ✅ 可继续延伸（不设上限）
-AI/LLM/GPT/微调                                      ✅ 3 层
-AI/Agent/记忆系统/VCP                                ✅ 4 层
+项目/石榴籽/语料/NLLB训练                 ✅ 最少 3 层
+项目/石榴籽/语料/NLLB训练/2026-06           ✅ 可继续延伸（不设上限）
+学习/AI/Transformer                        ✅ 3 层
+AI/Agent/记忆系统/VCP                      ✅ 4 层
 ```
 
 ---
@@ -104,13 +97,13 @@ AI/Agent/记忆系统/VCP                                ✅ 4 层
 | 组件 | 文件 | 说明 |
 |------|------|------|
 | `MemoryManager` | `manager.py` | 统一异步 API，add/get/delete/search/list/compress |
-| `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 三文件存储 |
-| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量搜索（ LanceDB 不可用时自动降级为 JSON Fallback）|
-| `L1LCMCompressor` | `l1_lcm.py` | 上下文压缩，FactType 实体提取 |
-| `SyncManager` | `sync.py` | L4 ↔ L3 双轨同步 |
-| `LibraryClassifier` | `library.py` | 4 层分类自动推断 |
-| `Embedder` | `embedder.py` | HashEmbedder（无需 API）/ DashScopeEmbedder（需 API Key）|
-| `IntegrityVerifier` | `integrity.py` | HMAC 签名验证 |
+| `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 三文件存储，portalocker 文件锁 |
+| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量搜索 + JSON Fallback + BM25 混合检索 |
+| `L1LCMCompressor` | `l1_lcm.py` | 上下文压缩，FactType 实体提取，query 相关性增强 |
+| `SyncManager` | `sync.py` | L4 ↔ L3 双轨同步，auto_sync 关键词检测 |
+| `LibraryClassifier` | `library.py` | 5 大类关键词分类，层级路径验证，缓存分词 |
+| `Embedder` | `embedder.py` | HashEmbedder（零依赖）/ DashScopeEmbedder（OpenAI-Compatible API）|
+| `IntegrityVerifier` | `integrity.py` | HMAC-SHA256 签名验证 |
 
 ---
 
@@ -121,8 +114,8 @@ AI/Agent/记忆系统/VCP                                ✅ 4 层
 ```
 memory/
 ├── abc123.md           # 人类可读内容
-├── abc123.meta.json    # 元数据
-└── abc123.vec.json    # 向量数据
+├── abc123.meta.json   # 元数据
+└── abc123.vec.json    # 向量数据（每个记忆一个，随 .md 同目录）
 ```
 
 ### meta.json 格式
@@ -144,27 +137,150 @@ memory/
 
 ---
 
-## 并发控制
+## 实现细节：那些让代码更优雅的小巧思
 
-写入安全由 `portalocker`（跨平台文件锁）保证，Windows 回退到 `msvcrt`，Unix 回退到 `fcntl`：
+### 原子写入：tempfile + os.replace（Windows 兼容）
+
+L4 文件写入使用两步原子操作：
 
 ```python
-# L4FilesStore 底层：写操作自动加锁
-portalocker.FileLock(f"{memory_id}.lock", timeout=5)
-# 读操作：共享锁（Unix fcntl.LOCK_SH / Windows msvcrt.LK_RLCK）
-# 写操作：独占锁（Unix fcntl.LOCK_EX / Windows msvcrt.LK_LOCK）
+# 1. 写入临时文件
+tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp", dir=base_dir)
+tmp.write(content); tmp.close()
+# 2. os.replace 原子替换（Windows 也保证原子性）
+os.replace(tmp.name, target_path)
+```
+
+os.rename 在 Windows 上不能跨驱动器工作，os.replace 则可以。这是很多跨平台 Python 项目的盲区。
+
+### portalocker：跨平台文件锁
+
+```python
+with _portalocker_lock(lock_path):
+    # 写操作自动加锁
+    ...
+```
+
+`portalocker` 优先，Windows 用 msvcrt，Unix 用 fcntl 回退。读操作用共享锁，写操作用独占锁。`contextmanager` 模式确保锁一定释放，即使异常也不漏。
+
+### `_embed_fn` 模式：sync/async 统一接口
+
+DashScopeEmbedder 的 `embed()` 是 `async def`，HashEmbedder 是 `def`，调用方用统一接口：
+
+```python
+# SyncManager.__init__ 中：
+if hasattr(embedder, 'embed_sync'):
+    self._embed_fn = embedder.embed_sync
+else:
+    self._embed_fn = embedder.embed
+```
+
+运行时检测，不需要类型判断。Embedder 基类提供 `embed_sync` 属性，async 实现包装为子线程运行。
+
+### 缓存分词（LibraryClassifier）
+
+关键词匹配时每次都重新分词是浪费。`_tokenize()` 用 `@functools.lru_cache(maxsize=512)` 缓存：
+
+```python
+@functools.lru_cache(maxsize=512)
+def _tokenize(self, text: str) -> tuple[str, ...]:
+    ...
+    return tuple(tokens)  # tuple 可哈希，才能做 lru_cache 的 key
+```
+
+返回 `tuple` 而非 `list`，因为 tuple 可哈希、适合做缓存 key。
+
+### 评分归一化：sqrt(keyword_count) 防止大类欺负小类
+
+分类词典中"项目"有 20+ 个关键词，"偏好"只有 8 个。直接累加会导致大类永远胜出。
+
+```python
+scores[category] = cat_raw / (len(keywords) ** 0.5)  # 开方归一化
+```
+
+用 `sqrt` 而非直接除以 `len(keywords)`：大列表有帮助，但不能主导结果。
+
+### Unicode 规范化 + 双轨检测（injection.py）
+
+检测混淆攻击需要两步：
+
+```python
+texts_to_check = [text, _normalize_text(text)]  # 原始文本 + 规范化文本
+```
+
+规范化步骤包括：零宽字符处理、HTML 实体 decode、全角→半角、Unicode 转义序列解码、反斜杠词还原、BIDI 控制符清除。混淆攻击（`rm\u200b-rf`、`rm&#x72;f`）在规范化后无处遁形。
+
+### BM25 参数可配置
+
+BM25 的 `k1`（词频饱和）和 `b`（文档长度归一化）可按场景调整：
+
+```python
+# k1=1.2, b=0.75 是 Lucene 默认值
+l3_store.search_bm25(query, top_k=5, k1=1.2, b=0.75)
+```
+
+### 混合搜索 α 加权可调
+
+向量相似度和 BM25 的混合权重 α 默认 0.7（向量 70%，BM25 30%）：
+
+```python
+alpha = 0.7
+final_score = alpha * vec_score + (1 - alpha) * bm25_score
+```
+
+### 5 分钟 stats 缓存
+
+`MemoryManager.stats()` 有本地缓存，避免每次都读文件系统：
+
+```python
+age = (datetime.now() - self._stats_timestamp).total_seconds()
+if age < 300:  # 5 分钟内直接返回缓存
+    return self._stats_cache
+```
+
+### `access_count` 持久化（不是内存变量）
+
+很多记忆系统把访问计数放内存，重启就丢。AgentMemory 把 `access_count` 写回 `.meta.json`，每次 `load_existing()` 自动 +1 并持久化。
+
+### query 参数增强 L1 压缩的相关性排序
+
+`compress_for_context(memory_ids, query="...")` 支持 query 参数，同 query 关键词重合的记忆在同重要性层级中排到前面：
+
+```python
+def _relevance_score(mem):
+    if not query_toks: return 0
+    return sum(1 for tok in query_toks if tok in mem.get("content","").lower())
 ```
 
 ---
 
 ## 安全防护（P0 级）
 
-| 防护项 | 说明 |
-|--------|------|
-| **注入检测** | `injection.py`：Unicode 规范化、角色扮演指令检测、越狱模式识别 |
-| **trust_score** | 同步前计算，< 0.2 拒绝写入 L3，≥ 0.2 且 flagged 时警告 |
-| **HMAC 验证** | `IntegrityVerifier`：记忆完整性签名，防篡改 |
-| **API Key 校验** | `DashScopeEmbedder.__init__` 立即校验，缺失抛 RuntimeError（架构强制要求）|
+| 防护项 | 实现位置 | 说明 |
+|--------|----------|------|
+| **注入检测** | `utils/injection.py` | Unicode 规范化 + 双轨检测（原始/规范化双重匹配），50+ 攻击模式，含 JNDI/SSTI/Shellshock/Prompt Injection |
+| **trust_score** | `sync.py` | < 0.2 拒绝写入 L3，≤ 0.35 标记 flagged 并警告 |
+| **HMAC 验证** | `integrity.py` | HMAC-SHA256 签名，写入 `.meta.json` 的 `signed_at` 字段 |
+| **API Key 校验** | `embedder.py` | `DashScopeEmbedder.__init__` 立即校验，缺失抛 RuntimeError |
+| **LanceDB 注入防护** | `web.py` / `cli.py` | category_path 中单引号转义为 `''`（SQL 标准转义）|
+| **原子写入** | `l4_files.py` | tempfile + os.replace，进程崩溃也不留脏文件 |
+| **文件锁** | `l4_files.py` | portalocker 独占锁，写操作互斥 |
+
+---
+
+## 并发安全
+
+写入安全由 `portalocker` 保证，Windows 回退到 `msvcrt`，Unix 回退到 `fcntl`：
+
+```python
+# L4FilesStore 写操作：自动加独占锁
+with _portalocker_lock(lock_path):
+    ...
+
+# 读操作：自动加共享锁
+with _file_lock(lock_path, exclusive=False):
+    ...
+```
 
 ---
 
@@ -177,7 +293,7 @@ pip install -e .
 
 ### 依赖项
 
-**运行时依赖（pyproject.toml）：**
+**运行时依赖（仅有 3 个，无需其他服务）：**
 
 ```
 httpx>=0.25.0    # DashScope API 异步调用
@@ -187,19 +303,13 @@ pydantic>=2.5    # 数据验证（运行时必需）
 
 **可选依赖：**
 
-```
-pip install agentmemory[web]    # Web API 支持（fastapi + uvicorn + jinja2）
-pip install agentmemory[lancedb] # LanceDB 向量数据库
+```bash
+pip install agentmemory[web]     # Web API 支持（fastapi + uvicorn）
+pip install agentmemory[lancedb] # LanceDB 向量数据库（高性能场景）
 pip install agentmemory[dev]     # 开发依赖（pytest 等）
 ```
 
-**Embedding 可选：**
-
-| 包 | 功能 | 默认 |
-|----|------|------|
-| `dashscope` | OpenAI-Compatible Embedding API（DashScope / Minimax / 任意兼容接口）| HashEmbedder（零依赖）|
-| `lancedb` | 向量数据库 | JSON fallback（零外部依赖）|
-
+> LanceDB 不可用时（未安装），系统自动降级为纯 JSON + numpy 实现，零额外依赖即可运行。
 
 ### Embedder 选择
 
@@ -213,20 +323,21 @@ mm = MemoryManager()
 # 显式指定（无 API Key 时立即抛 RuntimeError，不静默降级）
 mm = MemoryManager(embedder=get_embedder(backend="openai-compat"))
 
-# 等价于默认 auto 模式（推荐写法）
+# 等价于默认 auto 模式
 mm = MemoryManager(embedder=get_embedder())
 ```
 
-> **模型不绑定**：内部使用 OpenAI-Compatible API 格式，自动识别任意支持 `/v1/embeddings` 接口的 provider
->（DashScope / Minimax / OpenAI / 本地 Embedding Server 等）。通过环境变量配置。
+> **模型不绑定**：内部使用 OpenAI-Compatible API 格式，自动识别任意支持 `/v1/embeddings` 接口的 provider（DashScope / Minimax / OpenAI / 本地 Embedding Server 等）。
 
 ### 环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `AGENT_MEMORY_DIR` | `memory` | 记忆存储目录 |
-| `AGENT_MEMORY_DATA_DIR` | `data` | 向量数据目录 |
-| `EMBEDDING_API_KEY` | - | OpenAI-Compatible Embedding API（可选，支持 DashScope / Minimax / 任意兼容接口） |
+| `AGENT_MEMORY_DATA_DIR` | `data` | 向量数据目录（LanceDB 表 / JSON Fallback） |
+| `EMBEDDING_API_KEY` | - | OpenAI-Compatible API（推荐，支持任意兼容 provider） |
+| `DASHSCOPE_API_KEY` | - | 向后兼容，与 `EMBEDDING_API_KEY` 二选一 |
+| `OPENAI_API_KEY` | - | 向后兼容 |
 
 ---
 
@@ -250,7 +361,7 @@ async def main():
     )
     print(f"Added: {mem_id}")
 
-    # 语义搜索
+    # 语义搜索（默认 vector 模式）
     results = await mm.search("NLLB 模型训练")
     for r in results:
         print(f"[{r['score']:.3f}] {r['content'][:60]}")
@@ -264,7 +375,8 @@ async def main():
     print(f"Total: {stats['total_memories']}, Categories: {stats['categories']}")
 
     # L1 压缩（注入 AI Context）
-    compressed = await mm.compress_for_context([mem_id])
+    # query 参数：与 query 相关性高的记忆优先展示
+    compressed = await mm.compress_for_context([mem_id], query="NLLB训练")
     print(compressed)
 
     # 删除
@@ -276,26 +388,29 @@ asyncio.run(main())
 ### CLI
 
 ```bash
-# 添加记忆
-python -m agent_memory.cli add "测试记忆" --category "test" --tags "demo"
+# 添加记忆（自动分类）
+python -m agent_memory.cli add "测试记忆"
 
-# 语义搜索（默认 vector 模式）
-python -m agent_memory.cli search "测试"
+# 指定分类和标签
+python -m agent_memory.cli add "NLLB训练完成" --category "Project/Shiliuzi/Training" --tags "nllb,done"
 
-# 关键词搜索（BM25）
-python -m agent_memory.cli search "测试" --mode bm25
+# 语义搜索（默认）
+python -m agent_memory.cli search "NLLB 模型训练"
 
-# 混合搜索（语义 + 关键词融合）
-python -m agent_memory.cli search "测试" --mode hybrid
+# 关键词搜索（BM25，无需向量模型）
+python -m agent_memory.cli search "NLLB" --mode bm25
+
+# 混合搜索（向量 + BM25 加权）
+python -m agent_memory.cli search "NLLB" --mode hybrid
 
 # 列出所有
 python -m agent_memory.cli list
 
-# 查看单条
-python -m agent_memory.cli show <memory_id>
-
 # 按分类列出
 python -m agent_memory.cli list --category "Project/Shiliuzi"
+
+# 查看单条
+python -m agent_memory.cli show <memory_id>
 
 # 统计
 python -m agent_memory.cli stats
@@ -303,17 +418,20 @@ python -m agent_memory.cli stats
 # 删除
 python -m agent_memory.cli delete <memory_id>
 
-# 重新向量化（更换 embedder 类型时使用）
-python -m agent_memory.cli --json reembed --embedder hash
+# 显示所有顶层分类
+python -m agent_memory.cli category --show-all
 
-# HMAC 签名（对新加入的文件夹进行签名）
-python -m agent_memory.cli sign memory/ --key "$(python -c \"import secrets; print(secrets.token_hex(32))\")"
+# 显示已使用的所有分类路径
+python -m agent_memory.cli category --list
+
+# HMAC 签名（新加入的文件夹需要签名）
+python -m agent_memory.cli sign memory/ --key "your-secret-key-here"
 
 # HMAC 校验（验证文件夹完整性）
-python -m agent_memory.cli verify memory/ --key "your-key-here"
+python -m agent_memory.cli verify memory/ --key "your-secret-key-here"
 
-# 重新分类（移动记忆的分类路径）
-python -m agent_memory.cli category <memory_id> "Project/Shiliuzi/Competition"
+# 重新向量化（更换 embedder 时使用）
+python -m agent_memory.cli --json reembed --embedder hash
 
 # 启动 Web API 服务器
 python -m agent_memory.cli serve --port 8765
@@ -325,11 +443,11 @@ python -m agent_memory.cli serve --port 8765
 |------|------|------|
 | `add(content, category_path, tags, importance)` | `str` (memory_id) | 添加记忆，L4 + L3 双轨写入 |
 | `get(memory_id)` | `dict \| None` | 按 ID 获取 |
-| `delete(memory_id)` | `bool` | 删除，L4 + L3 同时清除 |
-| `search(query, limit, category_path, mode)` | `list[dict]` | 向量语义搜索，支持 mode=vector/bm25/hybrid |
-| `list(category_path)` | `list[dict]` | 按分类列出 |
-| `compress_for_context(memory_ids, query="")` | `str` | L1 压缩，query 参数增强同类别记忆优先级 |
-| `stats()` | `dict` | 统计：总数、分类、标签分布 |
+| `delete(memory_id)` | `bool` | 删除，L4 + L3 + vec.json 同时清除 |
+| `search(query, limit, category_path, mode)` | `list[dict]` | 向量/BM25/混合搜索，支持 mode=vector/bm25/hybrid |
+| `list(category_path, limit)` | `list[dict]` | 按分类列出 |
+| `compress_for_context(memory_ids, query)` | `str` | L1 压缩，query 参数增强同 query 相关记忆的优先级 |
+| `stats()` | `dict` | 统计（5 分钟缓存），总数/分类/存储大小/L3 覆盖率 |
 
 ---
 
@@ -349,10 +467,13 @@ python -m agent_memory.cli serve --port 8765
 
 | 决策 | 说明 | 原因 |
 |------|------|------|
-| 去掉相变机制 | 文件 + 向量永远是双轨 | VCP 验证：不需要相变 |
+| 去掉 L2 Graph-DB | 三层变四层 | Graph-DB 过度设计，实际只用分类路径就够了 |
+| 去掉了相变机制 | 文件 + 向量永远是双轨 | VCP 验证：不需要相变 |
 | 并发写入控制 | portalocker 文件锁 | 多 Agent 并发写入场景 |
-| 记忆关联 | AI 自动推断 + 用户手动 | 平衡自动化和精确性 |
-| Embedder 默认 Hash | 无需 API Key | 君子生非异也，善假于物也 |
+| Embedder 默认 Hash | 零依赖、确定性 | 生非异也，善假于物也 |
+| LanceDB 优先 + JSON Fallback | LanceDB 不可用自动降级 | 高性能场景用 LanceDB，零依赖场景用 JSON |
+| BM25 混合检索 | 纯 Python 实现，零额外依赖 | 补充纯关键词搜索场景，无需向量模型 |
+| min_depth=3 | 馆/架/书三级结构 | 确保记忆颗粒度，避免顶层过于笼统 |
 
 ---
 
