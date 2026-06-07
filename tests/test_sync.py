@@ -36,7 +36,7 @@ class TestSyncMechanism:
         
         # 存储事实
         memory_id = generate_mem_id()
-        await store.save_async(
+        await store.save(
             memory_id,
             "同步测试内容",
             {"importance": 0.8, "tags": ["测试"]}
@@ -62,15 +62,15 @@ class TestSyncMechanism:
         ids = []
         for i in range(3):
             memory_id = generate_mem_id()
-            await store.save_async(
+            await store.save(
                 memory_id,
                 f"记忆{i}",
                 {"importance": 0.5 + i * 0.1}
             )
             ids.append(memory_id)
-        
+
         # 验证全部写入
-        all_ids = store.list_all()
+        all_ids = store.list()
         assert len(all_ids) >= 3
 
     def test_auto_sync_check_decision(self):
@@ -119,18 +119,19 @@ class TestSyncIntegration:
         # L4 存储
         store = L4FilesStore(str(tmp_memory_dir))
         memory_id = generate_mem_id()
-        await store.save_async(
+        await store.save(
             memory_id,
             "完整同步测试",
             {"importance": 0.9}
         )
-        
+
         # 验证
-        content = await store.load_async(memory_id)
+        content = await store.load(memory_id)
         assert "完整同步测试" in content
-        
-        meta = await store.get_meta_async(memory_id)
-        assert meta["importance"] == 0.9
+
+        data = await store.load_existing(memory_id)
+        assert data is not None
+        assert data["meta"]["importance"] == 0.9
 
     @pytest.mark.asyncio
     async def test_bidirectional_consistency(self, tmp_memory_dir, mock_embedder):
@@ -139,13 +140,14 @@ class TestSyncIntegration:
         store = L4FilesStore(str(tmp_memory_dir))
         memory_id = generate_mem_id()
         metadata = {"importance": 0.7, "category_path": "测试"}
-        
-        await store.save_async(memory_id, "一致性测试", metadata)
-        
+
+        await store.save(memory_id, "一致性测试", metadata)
+
         # 验证元数据一致性
-        meta = await store.get_meta_async(memory_id)
-        assert meta["importance"] == 0.7
-        assert meta["category_path"] == "测试"
+        data = await store.load_existing(memory_id)
+        assert data is not None
+        assert data["meta"]["importance"] == 0.7
+        assert data["meta"]["category_path"] == "测试"
 
 
 class TestFileGroupOperations:
@@ -158,9 +160,9 @@ class TestFileGroupOperations:
         
         memory_id = generate_mem_id()
         content = "测试内容"
-        
-        await store.save_async(memory_id, content, {"importance": 0.8})
-        
+
+        await store.save(memory_id, content, {"importance": 0.8})
+
         # 验证 md 文件
         md_file = Path(tmp_memory_dir) / f"{memory_id}.md"
         assert md_file.read_text(encoding="utf-8") == content
@@ -171,7 +173,7 @@ class TestFileGroupOperations:
         store = L4FilesStore(str(tmp_memory_dir))
         
         memory_id = generate_mem_id()
-        await store.save_async(memory_id, "内容", {"importance": 0.8})
+        await store.save(memory_id, "内容", {"importance": 0.8})
         
         # 验证 meta 文件
         meta_file = Path(tmp_memory_dir) / f"{memory_id}.meta.json"

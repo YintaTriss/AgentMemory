@@ -44,41 +44,23 @@ class TestL1LCMCompressor:
         # 应该返回结果
         assert result is not None
 
-    def test_extract_decisions(self):
-        """提取决策"""
+    def test_extract_facts(self):
+        """提取事实"""
         compressor = L1LCMCompressor()
-        
-        messages = [
-            "我决定使用 Python",
-            "这是一个普通的消息",
-            "完成了项目"
-        ]
-        
-        decisions = compressor.extract_decisions(messages)
-        
-        assert isinstance(decisions, list)
 
-    def test_extract_key_sentences(self):
-        """提取关键句子"""
-        compressor = L1LCMCompressor()
-        
-        messages = [
-            "我们决定采用微服务架构",
-            "今天天气不错",
-            "项目已经完成了"
-        ]
-        
-        key_sentences = compressor.extract_key_sentences(messages)
-        
-        assert isinstance(key_sentences, list)
+        content = "我决定使用 Python。这是一个普通的消息。项目已经完成了。"
+
+        facts = compressor.extract_facts(content)
+
+        assert isinstance(facts, list)
 
     def test_fact_type_enum(self):
-        """FactType 枚举值"""
-        assert FactType.PERSON.value == "person"
-        assert FactType.PROJECT.value == "project"
-        assert FactType.DECISION.value == "decision"
-        assert FactType.PREFERENCE.value == "preference"
-        assert FactType.FACT.value == "fact"
+        """FactType constant values"""
+        assert FactType.GENERAL == "general"
+        assert FactType.PROJECT == "project"
+        assert FactType.DECISION == "decision"
+        assert FactType.PREFERENCE == "preference"
+        assert FactType.LEARNING == "learning"
 
     def test_compress_with_empty_api_key(self):
         """无 API Key 时优雅降级"""
@@ -100,18 +82,18 @@ class TestFactType:
 
     def test_all_fact_types_defined(self):
         """所有 FactType 都已定义"""
-        expected_types = ["person", "project", "decision", "preference", "fact"]
-        
+        expected_types = ["general", "project", "decision", "preference", "learning"]
+
         for fact_type in expected_types:
-            assert hasattr(FactType, fact_type.capitalize())
+            assert hasattr(FactType, fact_type.upper())
 
     def test_fact_type_values(self):
-        """FactType 值正确"""
-        assert FactType.FACT.value == "fact"
-        assert FactType.PERSON.value == "person"
-        assert FactType.PROJECT.value == "project"
-        assert FactType.DECISION.value == "decision"
-        assert FactType.PREFERENCE.value == "preference"
+        """FactType values correct"""
+        assert FactType.GENERAL == "general"
+        assert FactType.PROJECT == "project"
+        assert FactType.DECISION == "decision"
+        assert FactType.PREFERENCE == "preference"
+        assert FactType.LEARNING == "learning"
 
 
 class TestMockMode:
