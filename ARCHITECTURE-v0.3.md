@@ -95,22 +95,26 @@ AI/Agent/记忆系统/VCP
 
 ## 五、当前状态
 
-### ✅ 已完成
+### ✅ 已完成（代码实现已落地）
 - 架构设计 v0.3（已确定）
 - VCP / SpectrAI / Hermes / Mem0 / Letta 深度分析
-- 架构文档编写
+- **代码实现**（`src/agent_memory/`）：
+  - ✅ `MemoryManager`：统一异步 API
+  - ✅ `L4FilesStore`：md + meta.json + vec.json 文件存储
+  - ✅ `L3LanceDBStore`：LanceDB 向量语义搜索
+  - ✅ `L1LCMCompressor`：上下文压缩（FactType 实体提取）
+  - ✅ `SyncManager`：L4 ↔ L3 双轨同步
+  - ✅ `LibraryClassifier`：4 层分类自动推断
+  - ✅ `Embedder`：HashEmbedder（零依赖）+ DashScopeEmbedder（可选）
+  - ✅ `IntegrityVerifier`：HMAC 签名验证
+  - ✅ 文件锁并发控制：`portalocker` + `msvcrt/fcntl` 回退（Windows/Unix 均支持）
+  - ✅ P0 安全修复（注入检测、trust_score 阈值、Unicode 规范化）
+  - ✅ 适配器生态：`openclaw` / `claude_code` / `crewai` / `langchain` / `openai_agents`
 
-### ⏳ 待实现
-- [ ] 代码实现（预计 2026-06-15 后启动）
-- [ ] Embedding 本地模型集成（bge-large-zh）
-- [ ] 文件锁/队列并发机制
-- [ ] 图书馆分类自动推断算法
-- [ ] 向量库（可选 LanceDB 或纯 JSON）
-
-### 依赖项（可选）
+### 依赖项
 - Python 3.10+
-- bge-large-zh（本地 Embedding，可选）
-- LanceDB（可选向量库，也可纯文件）
+- bge-large-zh（本地 Embedding，可选；默认 HashEmbedder 零依赖）
+- LanceDB（可选向量库；默认 HashEmbedder 纯文件模式）
 
 ---
 
