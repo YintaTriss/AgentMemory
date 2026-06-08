@@ -231,12 +231,13 @@ async def cmd_search(
     as_json: bool,
 ) -> None:
     """处理 search 命令 — 支持 vector / bm25 / hybrid 三种模式"""
-    from .embedder import get_embedder
-
     store = L4FilesStore(base_dir=base_dir)
-    embedder = get_embedder()
     db_path = _qdrant_path(base_dir)
     l3_store = _get_l3_store(db_path)
+    # Use L3's embedder (FastEmbed with correct dimensions) — not get_embedder()
+    # get_embedder() returns HashEmbedder(384-dim) without API key, causing
+    # dimension mismatch with 512-dim FastEmbed vectors stored in Qdrant
+    embedder = l3_store._embedder
 
     if mode == "bm25":
         all_records = l3_store.get_all()
@@ -266,11 +267,48 @@ async def cmd_search(
             for r in raw
         ]
     elif mode == "hybrid":
+        # Proper hybrid: combine vector search + BM25 keyword search
+        # Step 1: vector search
         query_vector = embedder.embed(query)
-        if hasattr(l3_store, "search_hybrid"):
-            raw = l3_store.search_hybrid(query_vector, query, top_k=limit)
+        vector_results = l3_store.search(query_vector, top_k=limit * 2)
+
+        # Step 2: BM25 search
+        all_records = l3_store.get_all()
+        if all_records:
+            texts = [r.get("content", "") or "" for r in all_records]
+            bm25_indexer = BM25Indexer(k1=1.2, b=0.75)
+            bm25_indexer.index(texts)
+            bm_raw = bm25_indexer.search(query, top_k=limit * 2)
+            # Build id->bm25_score map from all_records
+            bm_id_scores = {}
+            for bm in bm_raw:
+                rec = all_records[bm["doc_index"]]
+                bm_id_scores[rec["id"]] = bm["bm25_score"]
         else:
-            raw = l3_store.search(query_vector, top_k=limit)
+            bm_id_scores = {}
+
+        # Step 3: Combine scores (normalized vector + normalized BM25)
+        vec_scores = {r["id"]: r.get("score", 0) for r in vector_results}
+        all_ids = list(vec_scores.keys())
+        max_vec = max(vec_scores.values()) if vec_scores else 1.0
+        max_bm = max(bm_id_scores.values()) if bm_id_scores else 1.0
+
+        combined = []
+        for id_ in all_ids:
+            vec_s = vec_scores[id_] / max_vec if max_vec > 0 else 0
+            bm_s = bm_id_scores.get(id_, 0) / max_bm if max_bm > 0 else 0
+            rec = next((r for r in vector_results if r["id"] == id_), {})
+            combined.append({
+                "id": id_,
+                "content": rec.get("content", ""),
+                "score": vec_s + bm_s,
+                "vector_score": vec_scores[id_],
+                "bm25_score": bm_id_scores.get(id_, 0),
+                "category_path": rec.get("category_path", ""),
+            })
+
+        combined.sort(key=lambda x: x["score"], reverse=True)
+        raw = combined[:limit]
         results = [
             {
                 "id": r["id"],

@@ -1,6 +1,6 @@
-# AgentMemory 架构文档 v0.3.2
+# AgentMemory 架构文档 v0.3.4
 
-> **版本：** v0.3.2（实现版）
+> **版本：** v0.3.4（实现版）
 > **日期：** 2026-06-08
 > **状态：** 与实现同步
 > **架构师：** 楚灵 ⚔️
@@ -63,7 +63,7 @@ create_memory_manager()  # 默认：Qdrant Edge + BM25 兜底
 search(query)
   └→ L3 向量搜索（Qdrant COSINE）
        ├→ scores > 0 → 返回向量相似度结果
-       └→ scores ≈ 0 → BM25 关键词重排序 → 返回关键词结果
+       └→ scores 全为 0 → BM25 关键词重排序 → 返回关键词结果
 ```
 
 **BM25 兜底逻辑**（`manager.py` `_bm25_rerank`）：
@@ -79,8 +79,8 @@ search(query)
 
 | Embedder | 维度 | 说明 |
 |----------|------|------|
-| **FastEmbed** `BAAI/bge-base-en-v1.5` | 768 | Qdrant 向量存储（需安装 `fastembed` 包） |
-| **HashEmbedder** | 384 | 零依赖纯 Hash 嵌入，用于文件向量存储 |
+| **FastEmbed** `BAAI/bge-small-zh-v1.5` | 512 | Qdrant 向量存储（默认中文模型） |
+| **HashEmbedder** | 384 | 零依赖纯 Hash 嵌入（CLI 在无 API key 时降级使用，但不用于主存储） |
 
 ### 依赖状态
 
@@ -100,7 +100,8 @@ pip install agentmemory          # 无额外依赖，仅 BM25 兜底
 - 安装 `fastembed` → 使用 `BAAI/bge-base-en-v1.5`（768维）→ 向量搜索正常
 - 未安装 `fastembed` → 回退到 `HashEmbedder`（384维）→ **Qdrant 存入零向量** → 搜索完全依赖 BM25
 
-**架构文档旧版本（v0.3）** 提及的 `bge-large-zh`（1024维）**未使用**，当前默认模型为 `BAAI/bge-base-en-v1.5`（768维）。
+**实际使用模型：** `BAAI/bge-small-zh-v1.5`（512维），专为中文语义搜索优化。
+**HashEmbedder**（384维）仅在 CLI 无 API key 且 L3 Qdrant 不可用时作为兜底。
 
 ---
 
@@ -109,9 +110,10 @@ pip install agentmemory          # 无额外依赖，仅 BM25 兜底
 | 决策 | 说明 | 原因 |
 |------|------|------|
 | Qdrant Edge primary | 默认 L3 后端 | 嵌入式 Rust 向量库，高性能语义搜索 |
-| BM25 fallback | 当向量搜索失败时触发 | Pure Python，零额外依赖，可靠的关键词检索 |
+| BM25 fallback | 当向量搜索**全部**score=0时触发 | Pure Python，零额外依赖，可靠的关键词检索 |
 | FastAPI Web 服务 | `src/agent_memory/web.py` | HTTP API 支持，可独立部署 |
-| CLI 三模式搜索 | `--mode vector\|bm25\|hybrid` | 向量 / 关键词 / 混合三种检索方式 |
+| CLI 三模式搜索 | `--mode vector\|bm25\|hybrid` | 向量 / 关键词 / 纯 BM25 三种检索方式 |
+| Hybrid 混合搜索 | CLI `--mode hybrid` | 向量 + BM25 分数归一化后相加（normalized_vec + normalized_bm25） |
 
 ---
 
@@ -192,11 +194,23 @@ pip install agentmemory
 ```
 memory/.lock_*           # 文件锁
 data/qdrant/             # Qdrant 向量数据库文件
-data/lancedb/            # LanceDB 数据目录
-data/lancedb_test*/      # 测试数据
+data/lancedb/            # LanceDB 数据目录（已删除，不再使用）
 ```
 
 ---
 
-_最后更新：2026-06-08 v0.3.2_
+## 十一、已知实现细节（与早期文档的差异）
+
+以下为已废弃/更改的设计，对应旧版文档：
+
+| 旧版描述 | 当前实际 | 说明日期 |
+|---------|---------|---------|
+| `bge-base-en-v1.5` (768维) | `BAAI/bge-small-zh-v1.5` (512维) | 2026-06-08 |
+| `bge-large-zh` (1024维) | 未使用 | 2026-06-08 |
+| l3_lancedb.py | 已删除 | 2026-06-07 |
+| BM25 触发条件 "scores ≈ 0" | scores **全为 0** | 2026-06-08 |
+
+---
+
+_最后更新：2026-06-08 v0.3.4_
 _架构师：楚灵 ⚔️_
