@@ -98,6 +98,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="使用的 Embedder 类型 (default: hash)",
     )
 
+    # mcp 命令
+    mcp_parser = subparsers.add_parser("mcp", help="启动 MCP Server（Claude Code / Codex 兼容）")
+    mcp_parser.add_argument("--http", action="store_true", help="启动 HTTP/SSE 模式（默认 stdio）")
+    mcp_parser.add_argument("--port", type=int, default=8765, help="HTTP 模式端口 (default: 8765)")
+    mcp_parser.add_argument("--host", default="127.0.0.1", help="HTTP 模式主机 (default: 127.0.0.1)")
+
+    # bg 命令（透明后台）
+    bg_parser = subparsers.add_parser("bg", help="启动透明后台记忆捕获器")
+    bg_parser.add_argument("--agent-id", default="default", help="Agent ID")
+    bg_parser.add_argument("--base-dir", default=DEFAULT_BASE_DIR, help="记忆存储目录")
+    bg_parser.add_argument("--importance", type=float, default=0.6, help="默认重要性 (default: 0.6)")
+    bg_parser.add_argument("--interval", type=int, default=5, help="心跳间隔分钟数 (default: 5)")
+    bg_parser.add_argument("--once", action="store_true", help="只运行一次然后退出")
+
     # serve 命令
     serve_parser = subparsers.add_parser("serve", help="启动 Web API 服务器")
     serve_parser.add_argument("--port", type=int, default=8765, help="监听端口 (default: 8765)")
@@ -598,6 +612,17 @@ def main() -> int:
             base_dir=base_dir,
             as_json=as_json,
         )) or 0
+
+    if command == "mcp":
+        # 动态导入避免循环依赖
+        from src.adapters.mcp_server import main as mcp_main
+        mcp_main()
+        return 0
+
+    if command == "bg":
+        from src.adapters.transparent_background import main as bg_main
+        bg_main()
+        return 0
 
     if command == "serve":
         cmd_serve(

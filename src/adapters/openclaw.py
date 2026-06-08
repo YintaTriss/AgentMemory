@@ -105,23 +105,16 @@ class OpenClawAdapter:
     # Tool methods
     def store(self, content: str, importance: float = 0.5) -> dict:
         """
-        存储记忆
-        
-        Args:
-            content: 记忆内容
-            importance: 重要性评分
-            
-        Returns:
-            执行结果
+        存储记忆（v0.3: 使用 add 命令）
         """
-        args = ["store", content, "--importance", str(importance)]
+        args = ["add", content, "--importance", str(importance)]
         result = self._run_cli(args)
-        
+
         if result["success"]:
             try:
                 data = json.loads(result["stdout"])
                 return {
-                    "success": True,
+                    "success": data.get("success", False),
                     "memory_id": data.get("memory_id"),
                     "content": content,
                 }
@@ -129,56 +122,40 @@ class OpenClawAdapter:
                 return {"success": True, "raw": result["stdout"]}
         else:
             return {"success": False, "error": result.get("error") or result["stderr"]}
-    
+
     def query(self, query_text: str, limit: int = 5) -> dict:
         """
-        查询记忆
-        
-        Args:
-            query_text: 查询文本
-            limit: 返回数量上限
-            
-        Returns:
-            查询结果
+        查询记忆（v0.3: 使用 search 命令）
         """
-        args = ["query", query_text, "--limit", str(limit)]
+        args = ["search", query_text, "--limit", str(limit)]
         result = self._run_cli(args)
-        
+
         if result["success"]:
             try:
                 data = json.loads(result["stdout"])
+                results = data.get("results", []) if isinstance(data, dict) else data
                 return {
                     "success": True,
-                    "results": data,
-                    "count": len(data) if isinstance(data, list) else 0,
+                    "results": results,
+                    "count": len(results) if isinstance(results, list) else 0,
                 }
             except json.JSONDecodeError:
                 return {"success": True, "raw": result["stdout"]}
         else:
             return {"success": False, "error": result.get("error") or result["stderr"]}
-    
+
     def forget(self, memory_id: str, permanent: bool = False) -> dict:
         """
-        删除记忆
-        
-        Args:
-            memory_id: 记忆 ID
-            permanent: 是否永久删除
-            
-        Returns:
-            执行结果
+        删除记忆（v0.3: 使用 delete 命令）
         """
-        args = ["forget", memory_id]
-        if permanent:
-            args.append("--permanent")
-        
-        result = self._run_cli(args)
-        
+        del_args = ["delete", memory_id]
+        result = self._run_cli(del_args)
+
         if result["success"]:
             try:
                 data = json.loads(result["stdout"])
                 return {
-                    "success": data.get("ok", True),
+                    "success": data.get("success", False),
                     "memory_id": memory_id,
                 }
             except json.JSONDecodeError:
