@@ -17,7 +17,7 @@ class TestMemoryManagerBasic:
     async def test_init_creates_layers(self, tmp_memory_dir):
         """初始化创建各层"""
         # 使用 L4-only 模式
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.get_stats.return_value = {"vector_count": 0}
             mock_l3.return_value = mock_l3_instance
@@ -30,7 +30,7 @@ class TestMemoryManagerBasic:
     @pytest.mark.asyncio
     async def test_add_increases_memory(self, tmp_memory_dir):
         """add → 完整流程"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3.return_value = mock_l3_instance
@@ -45,7 +45,7 @@ class TestMemoryManagerBasic:
     @pytest.mark.asyncio
     async def test_add_search_flow(self, tmp_memory_dir):
         """add → search 完整流程"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3_instance.search.return_value = []
@@ -63,7 +63,7 @@ class TestMemoryManagerBasic:
     @pytest.mark.asyncio
     async def test_add_list_get_delete_flow(self, tmp_memory_dir):
         """add → list → get → delete 完整流程"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3_instance.search.return_value = []
@@ -94,7 +94,7 @@ class TestMemoryManagerBasic:
     @pytest.mark.asyncio
     async def test_stats_returns_correct_fields(self, tmp_memory_dir):
         """stats 返回正确字段"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3.return_value = mock_l3_instance
@@ -113,7 +113,7 @@ class TestCategoryPath:
     @pytest.mark.asyncio
     async def test_category_path_auto_classification(self, tmp_memory_dir):
         """category_path 自动分类"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3_instance.search.return_value = []
@@ -136,7 +136,7 @@ class TestCategoryPath:
     @pytest.mark.asyncio
     async def test_default_category(self, tmp_memory_dir):
         """默认分类"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3_instance.search.return_value = []
@@ -157,7 +157,7 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_search_returns_results(self, tmp_memory_dir):
         """search 返回结果"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 1
             mock_l3_instance.search.return_value = [
@@ -174,7 +174,7 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_search_with_category_filter(self, tmp_memory_dir):
         """带分类过滤的搜索"""
-        with patch('src.agent_memory.manager.L3LanceDBStore') as mock_l3:
+        with patch('src.agent_memory.l3_qdrant.L3QdrantStore') as mock_l3:
             mock_l3_instance = MagicMock()
             mock_l3_instance.count.return_value = 0
             mock_l3_instance.search.return_value = []
