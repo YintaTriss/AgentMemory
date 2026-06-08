@@ -49,6 +49,22 @@ from .library import LibraryClassifier
 from .embedder import Embedder, HashEmbedder, get_embedder
 from . import integrity
 
+# AgentTeam integration（可选依赖，运行时检测）
+try:
+    from .agentteam_integration import (
+        AgentTeamMemoryProvider,
+        get_memory_provider,
+        TeamContext,
+        is_agentteam_environment,
+    )
+    _AGENTTEAM_AVAILABLE = True
+except ImportError:
+    AgentTeamMemoryProvider = None
+    get_memory_provider = None
+    TeamContext = None
+    is_agentteam_environment = None
+    _AGENTTEAM_AVAILABLE = False
+
 __all__ = [
     # Version
     "__version__",
@@ -77,4 +93,10 @@ __all__ = [
     "MemoryVec",
     # Integrity
     "integrity",
+    # AgentTeam integration
+    "AgentTeamMemoryProvider",
+    "get_memory_provider",
+    "TeamContext",
+    "is_agentteam_environment",
+    "_AGENTTEAM_AVAILABLE",
 ]
