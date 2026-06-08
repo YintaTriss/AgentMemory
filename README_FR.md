@@ -460,6 +460,113 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## Arrière-plan Transparent (Capture Automatique de Mémoire)
+
+Sans déclencheur — TransparentBackground fonctionne automatiquement :
+
+- **Capture par battement de cœur** : Stocke automatiquement les fragments de conversation toutes les N minutes
+- **Résumé périodique** : Génère automatiquement un résumé de session tous les 20 tours (stocké dans « Session/Résumé périodique »)
+- **Préchargement de contexte** : Injecte automatiquement les mémoires pertinentes dans le contexte AI avant de répondre
+
+### CLI
+
+```bash
+# Exécution continue (battement de cœur toutes les 5 minutes)
+agentmemory bg --agent-id main
+
+# Déclenchement unique (pour cron)
+agentmemory bg --agent-id main --once
+```
+
+### Exemple de configuration OpenClaw (mémoire automatique toutes les 5 minutes)
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+### API Python
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# Précharger les mémoires pertinentes avant de répondre
+context = await tb.inject_context_for_prompt(
+    current_message="Quelle est l'avancement de la compétition provinciale ?",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[Mémoires pertinentes]\n- [石榴籽/Projet] La date limite du projet est 2026-06-15...\n[/Mémoires pertinentes]"
+```
+
+---
+
+## Serveur MCP (Invocation d'Outils Multi-Plateforme)
+
+Expose les outils de mémoire via MCP (Model Context Protocol), supportant tous les outils de codage AI majeurs :
+
+| Client | Protocole | Configuration |
+|--------|-----------|---------------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### Démarrer le serveur MCP
+
+```bash
+# Claude Code / Codex (mode stdio)
+agentmemory mcp
+
+# Autres clients (mode HTTP)
+agentmemory mcp --http --port 8765
+```
+
+### Configuration Claude Code
+
+Ajouter dans `~/.claude/settings.json` :
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Outils MCP
+
+| Outil | Description |
+|-------|-------------|
+| `memory_add` | Ajouter une mémoire |
+| `memory_search` | Recherche sémantique/mots-clés/hybride |
+| `memory_list` | Lister par catégorie |
+| `memory_get` | Obtenir une seule mémoire |
+| `memory_delete` | Supprimer une mémoire |
+| `memory_stats` | Statistiques |
+| `memory_compress` | Compression de contexte L1 |
+
+### Exemples d'utilisation
+
+```
+# Mémoriser une information importante
+Remember: memory_add content="Compétition provinciale 石榴籽 2026-06-15" importance=0.9 tags="石榴籽"
+
+# Rechercher des mémoires pertinentes
+Search: memory_search query="date compétition" limit=5 mode="hybrid"
+```
+
+---
+
 ## Comparaison avec Autres Systèmes
 
 | Système | Format Données | Indexation | Multi-Agent | Support NAS | Zéro Dépendance Externe |

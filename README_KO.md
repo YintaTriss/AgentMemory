@@ -460,6 +460,113 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## 투명 백그라운드（자동 메모리 캡처）
+
+트리거 불필요 — TransparentBackground가 자동 실행：
+
+- **하트비트 캡처**：N분마다 대화 프래그먼트를 자동 저장
+- **주기적 요약**：20턴마다 세션 요약을 자동 생성（「세션/주기적 요약」에 저장）
+- **컨텍스트 프리페치**：응답 전에 관련 기억을 AI Context에 자동 주입
+
+### CLI
+
+```bash
+# 지속 실행（5분마다 하트비트）
+agentmemory bg --agent-id main
+
+# 단일 트리거（cron용）
+agentmemory bg --agent-id main --once
+```
+
+### OpenClaw 설정 예시（5분마다 자동 기억）
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+### Python API
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# 응답 전에 관련 기억을 주입
+context = await tb.inject_context_for_prompt(
+    current_message="석리자 성과 진행상황은?",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[관련 기억]\n- [석리자/프로젝트] 프로젝트 마감일은 2026-06-15...\n[/관련 기억]"
+```
+
+---
+
+## MCP Server（크로스 플랫폼 도구 호출）
+
+MCP（Model Context Protocol）로 메모리 도구를 노출, 모든 주요 AI 코딩 도구 지원：
+
+| 클라이언트 | 프로토콜 | 설정 |
+|-----------|----------|------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### MCP Server 시작
+
+```bash
+# Claude Code / Codex（stdio 모드）
+agentmemory mcp
+
+# 다른 클라이언트（HTTP 모드）
+agentmemory mcp --http --port 8765
+```
+
+### Claude Code 설정
+
+`~/.claude/settings.json`에 추가：
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### MCP 도구 목록
+
+| 도구명 | 설명 |
+|-------|------|
+| `memory_add` | 기억 추가 |
+| `memory_search` | 시맨틱/키워드/하이브리드 검색 |
+| `memory_list` | 카테고리별 목록 |
+| `memory_get` | 단일 기억 조회 |
+| `memory_delete` | 기억 삭제 |
+| `memory_stats` | 통계 정보 |
+| `memory_compress` | L1 컨텍스트 압축 |
+
+### 사용 예시
+
+```
+# 중요한 정보 기억
+Remember: memory_add content="석리자 성과 답변 2026-06-15" importance=0.9 tags="석리자"
+
+# 관련 기억 검색
+Search: memory_search query="성과 일정" limit=5 mode="hybrid"
+```
+
+---
+
 ## 다른 시스템과의 비교
 
 | 시스템 | 데이터 형태 | 인덱싱 | 멀티 Agent | NAS 지원 | 외부 의존성 없음 |

@@ -460,6 +460,113 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## Transparent Background (Automatic Memory Capture)
+
+Triggerless — TransparentBackground automatically:
+
+- **Heartbeat Capture**: Automatically stores conversation fragments every N minutes
+- **Periodic Summary**: Auto-generates session summary every 20 turns (stored in "Session/Periodic Summary")
+- **Context Prefetch**: Automatically injects relevant memories into AI Context before responding
+
+### CLI
+
+```bash
+# Running continuously (heartbeat every 5 minutes)
+agentmemory bg --agent-id main
+
+# Single trigger (suitable for cron)
+agentmemory bg --agent-id main --once
+```
+
+### OpenClaw Configuration Example (every 5 minutes auto-memory)
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+### Python API
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# Prefetch relevant memories before responding
+context = await tb.inject_context_for_prompt(
+    current_message="What's the progress on the provincial competition?",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[Relevant Memories]\n- [石榴籽/项目] Project deadline is 2026-06-15...\n[/Relevant Memories]"
+```
+
+---
+
+## MCP Server (Cross-Platform Tool Invocation)
+
+Exposes memory tools via MCP (Model Context Protocol), supporting all major AI coding tools:
+
+| Client | Protocol | Configuration |
+|--------|----------|---------------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### Start MCP Server
+
+```bash
+# Claude Code / Codex (stdio mode)
+agentmemory mcp
+
+# Other clients (HTTP mode)
+agentmemory mcp --http --port 8765
+```
+
+### Claude Code Configuration
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `memory_add` | Add memory |
+| `memory_search` | Semantic/keyword/hybrid search |
+| `memory_list` | List by category |
+| `memory_get` | Get single memory |
+| `memory_delete` | Delete memory |
+| `memory_stats` | Statistics |
+| `memory_compress` | L1 context compression |
+
+### Usage Examples
+
+```
+# Remember important info
+Remember: memory_add content="Shiliu provincial competition 2026-06-15" importance=0.9 tags="shiliu"
+
+# Search relevant memories
+Search: memory_search query="competition date" limit=5 mode="hybrid"
+```
+
+---
+
 ## Comparison with Other Systems
 
 | System | Data Format | Index | Multi-Agent | NAS Support | Zero External Dependencies |

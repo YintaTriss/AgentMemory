@@ -460,6 +460,113 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## 透明バックグラウンド（自動メモリキャプチャ）
+
+トリガーフリー — TransparentBackground が自動実行：
+
+- **ハートビートキャプチャ**：N分ごとに会話フラグメントを自動保存
+- **定期サマリー**：20ターンごとにセッションサマリーを自動生成（「会话/定期サマリー」に保存）
+- **コンテキストプリフェッチ**：応答前に相關記憶をAI Contextに自動注入
+
+### CLI
+
+```bash
+# 継続実行（5分ごとのハートビート）
+agentmemory bg --agent-id main
+
+# 単発トリガー（cron向け）
+agentmemory bg --agent-id main --once
+```
+
+### OpenClaw設定例（5分ごとの自動記憶）
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+### Python API
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# 応答前に相關記憶を注入
+context = await tb.inject_context_for_prompt(
+    current_message="省賽の進捗は？",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[関連記憶]\n- [石榴籽/プロジェクト] プロジェクト期限は2026-06-15...\n[/関連記憶]"
+```
+
+---
+
+## MCP Server（クロスプラットフォームツール呼び出し）
+
+MCP（Model Context Protocol）で記憶ツールを暴露、主要AIコーディングツールをすべてサポート：
+
+| クライアント | プロトコル | 設定 |
+|--------------|------------|------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### MCP Server の起動
+
+```bash
+# Claude Code / Codex（stdioモード）
+agentmemory mcp
+
+# 他のクライアント（HTTPモード）
+agentmemory mcp --http --port 8765
+```
+
+### Claude Code 設定
+
+`~/.claude/settings.json` に追加：
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### MCP ツール一覧
+
+| ツール名 | 説明 |
+|----------|------|
+| `memory_add` | 記憶を追加 |
+| `memory_search` | セマンティック/キーワード/ハイブリッド検索 |
+| `memory_list` | カテゴリ別にリスト |
+| `memory_get` | 單一の記憶を取得 |
+| `memory_delete` | 記憶を削除 |
+| `memory_stats` | 統計情報 |
+| `memory_compress` | L1 コンテキスト圧縮 |
+
+### 使用例
+
+```
+# 重要な情報を記憶
+Remember: memory_add content="石榴籽省賽答辯 2026-06-15" importance=0.9 tags="石榴籽"
+
+# 関連記憶を検索
+Search: memory_search query="省賽時間" limit=5 mode="hybrid"
+```
+
+---
+
 ## 他のシステムとの比較
 
 | システム | データ形式 | インデックス | マルチAgent | NAS対応 | 外部依存なし |

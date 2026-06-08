@@ -460,6 +460,113 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## 透明後台（自動記憶捕獲）
+
+無需關鍵詞觸發，TransparentBackground 自動：
+
+- **心跳捕獲**：每 N 分鐘自動存儲對話片段
+- **周期摘要**：每 20 輪自動生成會話摘要（存入「會話/定期摘要」）
+- **上下文預取**：回覆前自動注入相關記憶到 AI Context
+
+### CLI
+
+```bash
+# 持續運行（每 5 分鐘心跳）
+agentmemory bg --agent-id main
+
+# 單次觸發（適合 cron）
+agentmemory bg --agent-id main --once
+```
+
+### OpenClaw 配置示例（每 5 分鐘自動記憶）
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+### Python API
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# 回覆前預取相關記憶注入上下文
+context = await tb.inject_context_for_prompt(
+    current_message="省賽的進度怎麼樣了？",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[相關記憶]\n- [石榴籽/項目] 項目截止日期是 2026-06-15...\n[/相關記憶]"
+```
+
+---
+
+## MCP Server（跨平台工具調用）
+
+透過 MCP（Model Context Protocol）暴露記憶工具，支援所有主流 AI Coding 工具：
+
+| 用戶端 | 協議 | 配置 |
+|--------|------|------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### 啟動 MCP Server
+
+```bash
+# Claude Code / Codex（stdio 模式）
+agentmemory mcp
+
+# 其他用戶端（HTTP 模式）
+agentmemory mcp --http --port 8765
+```
+
+### Claude Code 配置
+
+在 `~/.claude/settings.json` 添加：
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### MCP 工具列表
+
+| 工具名 | 說明 |
+|--------|------|
+| `memory_add` | 添加記憶 |
+| `memory_search` | 語義/關鍵詞/混合搜索 |
+| `memory_list` | 按分類列出 |
+| `memory_get` | 獲取單條記憶 |
+| `memory_delete` | 刪除記憶 |
+| `memory_stats` | 統計信息 |
+| `memory_compress` | L1 上下文壓縮 |
+
+### 使用示例
+
+```
+# 記住重要資訊
+Remember: memory_add content="石榴籽省賽答辯 2026-06-15" importance=0.9 tags="石榴籽"
+
+# 搜索相關記憶
+Search: memory_search query="省賽時間" limit=5 mode="hybrid"
+```
+
+---
+
 ## 與其他系統對比
 
 | 系統 | 數據形態 | 索引方式 | 多 Agent | NAS 支援 | 無外部服務依賴 |
