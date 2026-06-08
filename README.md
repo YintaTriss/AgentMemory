@@ -52,10 +52,10 @@ AgentMemory 的答案：**双轨并存，永不取舍。**
           ┌──────────────────┴──────────────────┐
           ▼                                      ▼
 ┌─────────────────────┐              ┌─────────────────────────┐
-│   L4FilesStore      │              │   L3LanceDBStore        │
+│   L4FilesStore      │              │   L3QdrantStore          │
 │   （文件持久化）      │              │   （向量语义搜索）        │
 │                     │              │                         │
-│  memory/<id>.md     │◄──── sync ──►│  LanceDB Table         │
+│  memory/<id>.md     │◄──── sync ──►│  Qdrant Collection      │
 │  memory/<id>.meta   │              │  (语义相似度检索)        │
 │  memory/<id>.vec.json              │                         │
 └─────────────────────┘              └─────────────────────────┘
@@ -75,7 +75,7 @@ AgentMemory 的答案：**双轨并存，永不取舍。**
 | 层级 | 组件 | 职责 |
 |------|------|------|
 | **L4** | `L4FilesStore` | `.md` 内容 + `.meta.json` 元数据 + `.vec.json` 向量，文件系统持久化 |
-| **L3** | `L3LanceDBStore` | LanceDB 向量搜索（不可用时自动降级为纯 JSON + numpy），支持 BM25 混合检索 |
+| **L3** | `L3QdrantStore` | Qdrant Edge 向量搜索（Rust内核，嵌入式，零Docker），支持 BM25 混合检索 |
 | **L1** | `L1LCMCompressor` | 记忆压缩为摘要 + 实体列表，注入 AI prompt 时使用，支持 query 相关性增强 |
 | **L3** | `SyncManager` | L4 ↔ L3 双轨同步，自动同步关键词检测，portalocker 文件锁 |
 | **L3** | `LibraryClassifier` | 5 大顶层类自动分类，关键词归一化评分，缓存分词 |
@@ -107,7 +107,7 @@ AI/Agent/记忆系统/VCP                      ✅ 4 层
 |------|------|------|
 | `MemoryManager` | `manager.py` | 统一异步 API，add/get/delete/search/list/compress |
 | `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 三文件存储，portalocker 文件锁 |
-| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量搜索 + JSON Fallback + BM25 混合检索 |
+| `L3QdrantStore` | `l3_qdrant.py` | Qdrant Edge 向量搜索 + JSON Fallback + BM25 混合检索 |
 | `L1LCMCompressor` | `l1_lcm.py` | 上下文压缩，FactType 实体提取，query 相关性增强 |
 | `SyncManager` | `sync.py` | L4 ↔ L3 双轨同步，auto_sync 关键词检测 |
 | `LibraryClassifier` | `library.py` | 5 大类关键词分类，层级路径验证，缓存分词 |
@@ -271,7 +271,7 @@ def _relevance_score(mem):
 | **trust_score** | `sync.py` | < 0.2 拒绝写入 L3，≤ 0.35 标记 flagged 并警告 |
 | **HMAC 验证** | `integrity.py` | HMAC-SHA256 签名，写入 `.meta.json` 的 `signed_at` 字段 |
 | **API Key 校验** | `embedder.py` | `DashScopeEmbedder.__init__` 立即校验，缺失抛 RuntimeError |
-| **LanceDB 注入防护** | `web.py` / `cli.py` | category_path 中单引号转义为 `''`（SQL 标准转义）|
+| **Qdrant 注入防护** | `web.py` / `cli.py` | category_path 中单引号转义为 `''`（SQL 标准转义）|
 | **原子写入** | `l4_files.py` | tempfile + os.replace，进程崩溃也不留脏文件 |
 | **文件锁** | `l4_files.py` | portalocker 独占锁，写操作互斥 |
 
@@ -314,11 +314,12 @@ pydantic>=2.5    # 数据验证（运行时必需）
 
 ```bash
 pip install agentmemory[web]     # Web API 支持（fastapi + uvicorn）
-pip install agentmemory[lancedb] # LanceDB 向量数据库（高性能场景）
-pip install agentmemory[dev]     # 开发依赖（pytest 等）
+pip install agentmemory[qdrant] # Qdrant Edge 向量数据库（Rust内核，嵌入式，零Docker）
+pip install agentmemory[dev]    # 开发依赖（pytest 等）
 ```
 
-> LanceDB 不可用时（未安装），系统自动降级为纯 JSON + numpy 实现，零额外依赖即可运行。
+> Qdrant Edge 不需要 Docker，嵌入进程运行，与 Qdrant 服务器版共享同一存储格式。
+> Qdrant 不可用时（未安装），系统自动降级为纯 JSON + numpy 实现，零额外依赖即可运行。
 
 ### Embedder 选择
 
@@ -343,7 +344,7 @@ mm = MemoryManager(embedder=get_embedder())
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `AGENT_MEMORY_DIR` | `memory` | 记忆存储目录 |
-| `AGENT_MEMORY_DATA_DIR` | `data` | 向量数据目录（LanceDB 表 / JSON Fallback） |
+| `AGENT_MEMORY_DATA_DIR` | `data` | 向量数据目录（Qdrant 存储 / JSON Fallback） |
 | `EMBEDDING_API_KEY` | - | OpenAI-Compatible API（推荐，支持任意兼容 provider） |
 | `DASHSCOPE_API_KEY` | - | 向后兼容，与 `EMBEDDING_API_KEY` 二选一 |
 | `OPENAI_API_KEY` | - | 向后兼容 |
@@ -585,7 +586,7 @@ Search: memory_search query="省赛时间" limit=5 mode="hybrid"
 | 去掉了相变机制 | 文件 + 向量永远是双轨 | VCP 验证：不需要相变 |
 | 并发写入控制 | portalocker 文件锁 | 多 Agent 并发写入场景 |
 | Embedder 默认 Hash | 零依赖、确定性 | 生非异也，善假于物也 |
-| LanceDB 优先 + JSON Fallback | LanceDB 不可用自动降级 | 高性能场景用 LanceDB，零依赖场景用 JSON |
+| Qdrant Edge 优先 + JSON Fallback | Qdrant 不可用自动降级 | 高性能场景用 Qdrant Edge，零依赖场景用 JSON |
 | BM25 混合检索 | 纯 Python 实现，零额外依赖 | 补充纯关键词搜索场景，无需向量模型 |
 | min_depth=3 | 馆/架/书三级结构 | 确保记忆颗粒度，避免顶层过于笼统 |
 

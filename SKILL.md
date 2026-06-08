@@ -95,7 +95,7 @@ items = mm.browse("Project/Shiliuzi")
 环境变量（可选）：
 - `AGENTMEMORY_EMBEDDER` - embedder 类型：`local`（默认）或 `api`
 - `AGENTMEMORY_EMBEDDER_API_KEY` - DashScope API Key（API 模式）
-- `AGENTMEMORY_VECTOR_DB` - 向量库：`lancedb`（默认）或 `json`
+- `AGENTMEMORY_VECTOR_DB` - 向量库：`qdrant`（默认）或 `json`
 
 默认模式（local）零外部依赖，文件夹即可运行。
 

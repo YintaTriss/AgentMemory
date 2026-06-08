@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 After review, the L2 Graph-DB layer was deemed over-engineering and removed. The v0.3 architecture is now:
 
 ```
-L4 Files (File System) → L3 LanceDB (Vector) → L1 LCM (Compression)
+L4 Files (File System) → L3 Qdrant Edge (Vector) → L1 LCM (Compression)
 ```
 
 Previous v0.1/v0.2 architecture had 4 layers:

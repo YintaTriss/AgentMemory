@@ -48,9 +48,9 @@
                                    │ 自动同步
                                    ▼
                     ┌────────────────────────────────────┐
-                    │     L3LanceDBStore (LanceDB)   │
+                    │     L3QdrantStore (Qdrant Edge)  │
                     │   + BM25 混合检索              │
-                    │   (LanceDB 优先，JSON Fallback) │
+                    │   (Qdrant Edge 优先，JSON Fallback) │
                     └───────────────────────────────────┘
 ```
 
@@ -59,7 +59,7 @@
 | 层 | 名称 | 职责 | 实现位置 |
 |----|------|------|----------|
 | **L4** | Files | 唯一真实数据源（Single Source of Truth）。每个记忆 = 3 文件 | `src/agent_memory/l4_files.py` |
-| **L3** | Vector | 向量索引层。L4 → L3 **异步同步**，L3 可重建（从 L4 恢复） | `src/agent_memory/l3_lancedb.py` |
+| **L3** | Vector | 向量索引层。L4 → L3 **异步同步**，L3 可重建（从 L4 恢复） | `src/agent_memory/l3_qdrant.py` |
 | **L1** | LCM Compressor | 上下文压缩器。从 L4 读取 N 条记忆 → 压缩为适合 prompt 的摘要 | `src/agent_memory/l1_lcm.py` |
 
 **为什么去掉 L2 Graph-DB？**
@@ -86,7 +86,7 @@ memory/
 ```
 
 > **注意**：`*.vec.json` 文件由 L4FilesStore 随 `.md` 同目录管理（不是 central index）。
-  L3LanceDBStore 的 LanceDB 表 / JSON fallback 存储在 `data/lancedb/`（可配置），
+  L3QdrantStore 的 Qdrant 存储 / JSON fallback 存储在 `data/qdrant/`（可配置），
   记录向量引用 + 元数据，不重复存储内容文本。
 
 ### 3.2 `*.md`（内容本体）
@@ -389,30 +389,29 @@ dependencies = [
 
 ### 8.3 不引入
 
-- ✅ `lancedb` —— L3 向量存储首选（见 §9）
+- ✅ `qdrant` —— L3 向量存储首选（见 §9）
 - ❌ `sentence-transformers` —— 太大，按需 install
-- ❌ `chromadb / qdrant-client` —— 违反"无独立服务"原则
 - ❌ `pyyaml` —— 配置用 JSON / TOML
 
-> **实现说明**：L3 以 LanceDB 为首选向量引擎，提供高性能向量搜索；
-  当 `lancedb` 不可用时（未安装或导入失败），自动降级为纯 JSON + numpy fallback，
-  零额外依赖即可运行。BM25 混合检索不依赖任何外部库。
+> **实现说明**：L3 以 Qdrant Edge 为首选向量引擎，Rust 内核，嵌入式运行（零 Docker）；
+  当 `qdrant` 不可用时（未安装或导入失败），自动降级为纯 JSON + numpy fallback，
+  零额外依赖即可运行。BM25 混合检索不依赖任何外部库。FastEmbed 可选（用于本地 embedding 模型）。
 
 
 ---
 
 ## 九、L3 向量层实现细节
 
-### 9.1 实现选择：LanceDB 优先 + JSON Fallback
+### 9.1 实现选择：Qdrant Edge 优先 + JSON Fallback
 
-`L3LanceDBStore`（`l3_lancedb.py`）实现双模式：
+`L3QdrantStore`（`l3_qdrant.py`）实现双模式：
 
 | 模式 | 触发条件 | 性能 | 依赖 |
 |------|----------|------|------|
-| **LanceDB** | `lancedb` 包已安装 | 高（Rust 内核 + 磁盘索引）| `lancedb>=0.1`, `pyarrow` |
-| **JSON Fallback** | LanceDB 不可用 | 中（内存矩阵，< 10K 条足够）| 仅 `numpy` |
+| **Qdrant Edge** | `qdrant_client` 包已安装 | 高（Rust 内核 + 磁盘索引）| `qdrant_client>=1.18`, `fastembed`（可选） |
+| **JSON Fallback** | Qdrant 不可用 | 中（内存矩阵，< 10K 条足够）| 仅 `numpy` |
 
-- LanceDB 是 Rust 内核 + Python 绑定，提供磁盘持久化向量索引。
+- Qdrant Edge 是 Rust 内核 + Python 绑定，嵌入式运行（不需要 Docker 或独立进程），提供磁盘持久化向量索引。
 - v0.3 数据规模：个人 Agent < 10K 条记忆，JSON Fallback 完全够用。
 - **BM25 混合检索**在两种模式下均可用，纯 Python 实现，零额外依赖。
 
@@ -427,34 +426,35 @@ memory/
 └── <id>.vec.json         ← L4 向量数据（每个记忆一个）
 ```
 
-**LanceDB 表 / JSON Fallback 数据**（由 L3LanceDBStore 管理，在 `data/lancedb/`）：
+**Qdrant 存储 / JSON Fallback 数据**（由 L3QdrantStore 管理，在 `data/qdrant/`）：
 
 ```
-data/lancedb/
-└── lance_db/             # LanceDB 数据库目录（本身是文件夹）
-    └── <table>           # 向量表：id / vector / content / metadata / category_path / importance
+data/qdrant/
+└── collection/            # Qdrant 集合目录
+    └── memories/         # 集合名称（SQLite 存储）
+        └── storage.sqlite  # 向量数据
 
 # 或 JSON Fallback 模式：
 data/
-└── lancedb_fallback.json  # 所有向量 + 元数据的合并 JSON
+└── qdrant_fallback.json  # 所有向量 + 元数据的合并 JSON
 ```
 
 ### 9.3 检索算法
 
 ```python
 def search(query_vector, top_k=5, filter_expr=None):
-    # 1. LanceDB 模式：用 .search() 向量索引
+    # 1. Qdrant Edge 模式：用 .query_points() 向量索引
     #    或 JSON Fallback：用 numpy 矩阵乘法计算余弦相似度
     results = l3_store.search(query_vector, top_k=top_k * 2, filter_expr=filter_expr)
     # 2. Top-K 截断
     return sorted(results, key=lambda r: r.score, reverse=True)[:top_k]
 ```
 
-**性能目标**：1 万条记忆，检索 < 10ms（LanceDB）/ < 50ms（JSON Fallback）。
+**性能目标**：1 万条记忆，检索 < 10ms（Qdrant Edge）/ < 50ms（JSON Fallback）。
 
 ### 9.4 BM25 混合检索
 
-`L3LanceDBStore` 两个方法：
+`L3QdrantStore` 两个方法：
 
 - `search_bm25(query, top_k, k1=1.2, b=0.75)` — 纯 Python BM25 索引，零额外依赖
 - `search_hybrid(query_vector, query_text, top_k, alpha=0.7)` — 加权混合检索
@@ -614,7 +614,7 @@ def check_injection(text: str) -> list[str]:
 |----|------|------|----------|
 | ADR-001 | 删除 L2 Graph-DB | 过度设计；embedding + tags 已能表达关系 | Neo4j / Mem0 图层 |
 | ADR-002 | 双轨永远并存（无相变） | 简化心智模型；同步无歧义 | v0.2 的"热/冹"切换 |
-| ADR-003 | L3 用 LanceDB（JSON Fallback）| 高性能向量检索；LanceDB 不可用时自动降级为纯 JSON，零额外依赖 | Chroma / Qdrant（需独立服务） |
+| ADR-003 | L3 用 Qdrant Edge（JSON Fallback）| 高性能向量检索；Qdrant 不可用时自动降级为纯 JSON，零额外依赖 | Chroma / LanceDB（嵌入式不够强） |
 | ADR-004 | 最多 4 层分类 | 平衡表达力与认知负担 | 无限制 / 树形结构 |
 | ADR-005 | HashEmbedder 默认 | 零依赖即可工作；测试友好 | 必须 API 联网 |
 | ADR-006 | L4 写同步 / L3 写异步 | L4 是 SoT 不能丢；L3 可重建 | 全同步（慢） |
