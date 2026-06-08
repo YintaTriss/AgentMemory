@@ -20,8 +20,9 @@ except ImportError:
 
 from . import __version__
 from .l4_files import L4FilesStore
-from .l3_lancedb import L3LanceDBStore
+from .l3_qdrant import L3QdrantStore
 from .library import LibraryClassifier
+from .bm25 import BM25Indexer
 
 
 # ============================================================================
@@ -61,7 +62,7 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
 
     # Initialize stores on startup
     store = L4FilesStore(base_dir=base_dir)
-    l3_store = L3LanceDBStore(db_path=db_path)
+    l3_store = L3QdrantStore(db_path=db_path)
     classifier = LibraryClassifier()
 
     # ---- Internal helpers ----
@@ -225,7 +226,18 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
         embedder = get_embedder()
 
         if mode == "bm25":
-            raw = l3_store.search_bm25(q, top_k=top_k)
+            # BM25 search: build index from all records (same as CLI)
+            all_records = l3_store.get_all()
+            if not all_records:
+                return {"mode": "bm25", "query": q, "results": []}
+            texts = [r.get("content", "") or "" for r in all_records]
+            indexer = BM25Indexer(k1=1.2, b=0.75)
+            indexer.index(texts)
+            bm_raw = indexer.search(q, top_k=top_k)
+            raw = []
+            for bm in bm_raw:
+                rec = all_records[bm["doc_index"]]
+                raw.append({"id": rec["id"], "content": rec.get("content", ""), "bm25_score": bm["bm25_score"]})
             return {"mode": "bm25", "query": q, "results": raw}
 
         # P0-5 fix: handle async embedder
@@ -242,7 +254,18 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
 
         # hybrid: RRF (Reciprocal Rank Fusion) - unified with CLI
         vec_results = l3_store.search(query_vector, top_k=top_k * 2, filter_expr=filter_expr)
-        bm25_results = l3_store.search_bm25(q, top_k=top_k * 2)
+        # BM25: build index from all records (same as CLI + bm25 mode above)
+        all_records = l3_store.get_all()
+        bm_id_scores = {}
+        if all_records:
+            texts = [r.get("content", "") or "" for r in all_records]
+            indexer = BM25Indexer(k1=1.2, b=0.75)
+            indexer.index(texts)
+            bm_raw = indexer.search(q, top_k=top_k * 2)
+            for rank, bm in enumerate(bm_raw):
+                rec = all_records[bm["doc_index"]]
+                bm_id_scores[rec["id"]] = {"content": rec.get("content", ""), "bm25_score": bm["bm25_score"]}
+        bm25_results = [{"id": mid, **v} for mid, v in bm_id_scores.items()]
 
         RRF_K = 60
         vec_rank = {r["id"]: rank for rank, r in enumerate(vec_results)}
