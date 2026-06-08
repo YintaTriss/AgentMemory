@@ -122,9 +122,10 @@ class MemoryManager:
                 mem_map[memory_id] = mem
 
         if category_path:
+            # Prefix match so '测试' matches '测试/石榴籽', '测试/其他' etc.
             filtered_ids = [
                 mid for mid, mem in mem_map.items()
-                if mem.get("meta", {}).get("category_path") == category_path
+                if mem.get("meta", {}).get("category_path", "").startswith(category_path)
             ]
         else:
             filtered_ids = list(mem_map.keys())
