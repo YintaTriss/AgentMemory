@@ -460,6 +460,111 @@ python -m agent_memory.cli serve --port 8765
 
 ---
 
+## 透明后台（自动记忆捕获）
+
+无需关键词触发，TransparentBackground 自动：
+
+- **心跳捕获**：每 N 分钟自动存储对话片段
+- **周期摘要**：每 20 轮自动生成会话摘要（存入"会话/定期摘要"）
+- **上下文预取**：回复前自动注入相关记忆到 AI Context
+
+```bash
+# 持续运行（每 5 分钟心跳）
+agentmemory bg --agent-id main
+
+# 单次触发（适合 cron 调用）
+agentmemory bg --agent-id main --once
+```
+
+**OpenClaw 配置示例**（每 5 分钟自动记忆）：
+
+```json
+{
+  "name": "memory-heartbeat",
+  "sessionTarget": "isolated",
+  "schedule": { "kind": "cron", "expr": "*/5 * * * *", "tz": "Asia/Shanghai" },
+  "payload": { "kind": "agentTurn", "message": "agentmemory bg --agent-id main --once" }
+}
+```
+
+Python API：
+
+```python
+from src.adapters.transparent_background import TransparentBackground
+
+tb = TransparentBackground(agent_id="main")
+
+# 回复前预取相关记忆注入上下文
+context = await tb.inject_context_for_prompt(
+    current_message="省赛的进度怎么样了？",
+    max_memories=5,
+    max_chars=2000
+)
+# → "\n\n[相关记忆]\n- [石榴籽/项目] 项目截止日期是 2026-06-15...\n[/相关记忆]"
+```
+
+---
+
+## MCP Server（跨平台工具调用）
+
+通过 MCP（Model Context Protocol）暴露记忆工具，支持所有主流 AI Coding 工具：
+
+| 客户端 | 协议 | 配置 |
+|--------|------|------|
+| Claude Code | MCP stdio | `~/.claude/settings.json` |
+| Codex | MCP stdio | `~/.config/codex/config.json` |
+| Cursor | MCP stdio/HTTP | Settings → MCP |
+| Windsurf | MCP stdio/HTTP | Settings → MCP |
+
+### 启动 MCP Server
+
+```bash
+# Claude Code / Codex（stdio 模式）
+agentmemory mcp
+
+# 其他客户端（HTTP 模式）
+agentmemory mcp --http --port 8765
+```
+
+### Claude Code 配置
+
+在 `~/.claude/settings.json` 添加：
+
+```json
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "agentmemory",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### MCP 工具列表
+
+| 工具名 | 说明 |
+|--------|------|
+| `memory_add` | 添加记忆 |
+| `memory_search` | 语义/关键词/混合搜索 |
+| `memory_list` | 按分类列出 |
+| `memory_get` | 获取单条记忆 |
+| `memory_delete` | 删除记忆 |
+| `memory_stats` | 统计信息 |
+| `memory_compress` | L1 上下文压缩 |
+
+### 使用示例
+
+```
+# 记住重要信息
+Remember: memory_add content="石榴籽省赛答辩 2026-06-15" importance=0.9 tags="石榴籽"
+
+# 搜索相关记忆
+Search: memory_search query="省赛时间" limit=5 mode="hybrid"
+```
+
+---
+
 ## 与其他系统对比
 
 | 系统 | 数据形态 | 索引方式 | 多 Agent | NAS 支持 | 无外部服务依赖 |
