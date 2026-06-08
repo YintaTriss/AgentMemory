@@ -84,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # stats 命令
     stats_parser = subparsers.add_parser("stats", help="显示统计信息")
+    stats_parser.add_argument("--namespace", help="命名空间")
 
     # P0-4: sign 命令
     sign_parser = subparsers.add_parser("sign", help="对记忆目录进行 HMAC 签名")
@@ -667,9 +668,25 @@ def main() -> int:
     namespace = kwargs.pop("namespace", None)
     
     # Apply namespace isolation: base_dir → base_dir/{namespace}/
+    # Security: validate namespace cannot escape base_dir via path traversal
     if namespace:
-        ns_sanitized = namespace.replace("../", "").replace("..", "").strip("/")
-        base_dir = str(Path(base_dir) / ns_sanitized)
+        import re
+        # Filter: only allow word chars (alphanumeric+_), Chinese chars, /, -, space
+        ns_filtered = re.sub(r'[^\w\-一-\u9fff\s/]', '', namespace)
+        ns_clean = ns_filtered.strip('/\\')
+        if not ns_clean or ns_clean.startswith('.'):
+            raise ValueError(f"Invalid namespace: {namespace!r}")
+        ns_path = Path(base_dir) / ns_clean
+        # Verify resolved path stays within base_dir (prevents /etc/passwd, ../../../etc attacks)
+        try:
+            ns_path = ns_path.resolve()
+            base_dir_resolved = Path(base_dir).resolve()
+            # Must be under base_dir (is_relative_to available Python 3.9+)
+            if not str(ns_path).startswith(str(base_dir_resolved)):
+                raise ValueError(f"Namespace escapes base_dir: {namespace!r}")
+        except Exception:
+            raise ValueError(f"Invalid namespace path: {namespace!r}")
+        base_dir = str(ns_path)
 
     if command == "sign":
         cmd_sign(kwargs["dir"], kwargs["key"], as_json)

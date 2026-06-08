@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentmemory"
-version = "0.3.4"
+version = "2.0.2"
 description = "交响乐技能家族 - 三层架构记忆系统，融合 Hermes + Mem0 优点，支持双轨检索与图书馆分类"
 readme = "README.md"
 license = {text = "MIT"}
