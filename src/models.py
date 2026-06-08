@@ -16,7 +16,7 @@ except ImportError:
 
 try:
     import ulid
-    ULIDType = getattr(ulid, 'ULID', ulid.ulid.__class__)
+    ULIDType = getattr(ulid, 'ULID', str)  # str fallback for old ulid 1.x
 except ImportError:
     # 兼容未安装 ulid 的环境
     ULIDType = str

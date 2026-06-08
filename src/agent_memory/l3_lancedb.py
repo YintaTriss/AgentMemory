@@ -184,7 +184,6 @@ class L3LanceDBStore:
             else:
                 self._table = self._db.open_table(self.table_name)
         except Exception as e:
-            print(f"[L3] LanceDB init failed: {e}, falling back to JSON")
             self._use_fallback = True
             self._init_fallback()
     
@@ -255,7 +254,6 @@ class L3LanceDBStore:
                 }])
                 return True
             except Exception as e:
-                print(f"[L3] upsert error for {id}: {e}")
                 return False
     
     def search(self, query_vector: List[float], top_k: int = 5,
@@ -286,7 +284,6 @@ class L3LanceDBStore:
             formatted.sort(key=lambda x: x["score"], reverse=True)
             return formatted
         except Exception as e:
-            print(f"[L3] Search error: {e}")
             # LanceDB vector search unavailable — return all L3 records with score=0
             # to signal manager layer (which has query text) to apply BM25 re-ranking.
             all_records = self.get_all()
@@ -354,7 +351,6 @@ class L3LanceDBStore:
             self._table.delete(f"id = '{id}'")
             return True
         except Exception as e:
-            print(f"[L3] Delete error: {e}")
             return False
 
 
@@ -387,9 +383,9 @@ class L3LanceDBStore:
         else:
             try:
                 self._db.drop_table(self.table_name)
-            except Exception as e:
-                print(f"[L3] Drop table error: {e}")
-    
+            except Exception:
+                pass
+
     def get_all(self) -> List[Dict[str, Any]]:
         """Get all memories (for debugging/testing)."""
         if self._use_fallback:

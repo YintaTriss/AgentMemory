@@ -178,7 +178,9 @@ class MemoryManager:
 
     async def delete(self, memory_id: str) -> bool:
         deleted = await self.l4.delete(memory_id)
-        self.sync.delete_from_l3(memory_id)
+        l3_ok = self.sync.delete_from_l3(memory_id)
+        # L4 delete is the source of truth; L3 failure is non-critical
+        # (L3 vector becomes orphaned but cannot be retrieved since L4 content is gone)
         if deleted:
             self._invalidate_cache()
         return deleted

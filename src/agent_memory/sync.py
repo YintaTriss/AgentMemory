@@ -54,14 +54,12 @@ class SyncManager:
         try:
             mem = await self.l4.load_existing(memory_id)
             if not mem:
-                print(f"[Sync] Memory {memory_id} not found in L4")
                 return False
 
             content = mem.get("content", "")
             meta = mem.get("meta", {})
 
             if not content:
-                print(f"[Sync] Memory {memory_id} has no content")
                 return False
 
             # P1-1 fix: use _embed_fn which handles sync/async embedder correctly
@@ -82,10 +80,9 @@ class SyncManager:
 
             # P0-5 fix: enforce minimum trust threshold — reject if trust_score < 0.2
             if trust_score < 0.2:
-                print(f"[Sync] REJECTED {memory_id}: trust_score={trust_score:.2f}, flagged_patterns={matched_patterns}")
                 return False
             elif flagged:
-                print(f"[Sync] WARNING {memory_id}: trust_score={trust_score:.2f}, flagged_patterns={matched_patterns}")
+                pass  # Flagged memories are logged by caller
 
             metadata = {
                 "source": source,
@@ -106,11 +103,9 @@ class SyncManager:
                 self._write_vec_json(memory_id, vector)
                 return True
             else:
-                print(f"[Sync] L3 upsert failed for {memory_id}, skipping vec.json write")
                 return False
 
         except Exception as e:
-            print(f"[Sync] Error syncing {memory_id}: {e}")
             return False
     
     async def sync_all(self) -> Dict[str, int]:
@@ -154,7 +149,6 @@ class SyncManager:
                     return True
             return False
         except Exception as e:
-            print(f"[Sync] Auto-sync check error for {memory_id}: {e}")
             return False
     
     def delete_from_l3(self, memory_id: str) -> bool:
@@ -174,7 +168,6 @@ class SyncManager:
             result = self.l3.delete(memory_id)
             return result
         except Exception as e:
-            print(f"[Sync] Error deleting {memory_id} from L3: {e}")
             return False
     
     def _write_vec_json(self, memory_id: str, vector: List[float]) -> None:

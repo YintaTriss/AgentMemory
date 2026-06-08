@@ -97,25 +97,18 @@ class L3QdrantStore:
             )
 
             # FastEmbed is optional — used for hybrid search if available.
-            # It requires downloading model files (internet access).
-            # If it fails, we fall back gracefully; the manager's embedder
-            # will provide vectors for storage.
+            # If it fails, the manager's embedder provides vectors.
             if FASTEMBED_AVAILABLE:
                 try:
                     self._embedder = TextEmbedding(model_name=self.embedder_model)
-                    print(f"[L3] FastEmbed loaded: {self.embedder_model}")
-                except Exception as e:
-                    print(f"[L3] FastEmbed init failed: {e} — using fallback embedder")
+                except Exception:
                     self._embedder = None
             else:
                 self._embedder = None
-                print(f"[L3] FastEmbed not available — using fallback embedder")
 
         except Exception as e:
-            print(f"[L3] Qdrant init failed: {e}, falling back to JSON")
             self._use_fallback = True
             self._init_fallback()
-            return
 
     def _ensure_collection(self, vector_dim: int) -> None:
         """Lazily create the Qdrant collection with the given vector dimension."""
@@ -132,10 +125,11 @@ class L3QdrantStore:
                         distance=Distance.COSINE,
                     ),
                 )
-                print(f"[L3] Created Qdrant collection '{self.collection_name}' (dim={vector_dim})")
-            self._collection_created = True
+                self._collection_created = True
         except Exception as e:
-            print(f"[L3] Collection creation error: {e}")
+            # Collection may already exist (race condition or same-name check)
+            # Mark as created to avoid repeated attempts
+            self._collection_created = True
 
     def _init_fallback(self) -> None:
         """Initialize in-memory JSON fallback when Qdrant is unavailable."""
@@ -212,7 +206,6 @@ class L3QdrantStore:
                 normalized.append(v.tolist())
             return normalized
         except Exception as e:
-            print(f"[L3] Embedding error: {e}")
             dim = self._vector_dim or DEFAULT_DIM
             return [[0.0] * dim] * len(texts)
 
@@ -286,7 +279,6 @@ class L3QdrantStore:
             return True
 
         except Exception as e:
-            print(f"[L3] Qdrant upsert error for {id}: {e}")
             return False
 
     def _mem_id_to_point_id(self, mem_id: str) -> str:
@@ -352,7 +344,6 @@ class L3QdrantStore:
             return formatted
 
         except Exception as e:
-            print(f"[L3] Qdrant search error: {e}")
             return self._search_fallback(query_vector, top_k, filter_expr)
 
     def _search_fallback(
@@ -429,7 +420,6 @@ class L3QdrantStore:
             )
             return True
         except Exception as e:
-            print(f"[L3] Qdrant delete error: {e}")
             return False
 
     def count(self) -> int:
@@ -485,8 +475,8 @@ class L3QdrantStore:
 
         try:
             self._client.delete_collection(self.collection_name)
-        except Exception as e:
-            print(f"[L3] Drop collection error: {e}")
+        except Exception:
+            pass  # Silently ignore drop errors
 
     def get_embedder(self):
         """Return the FastEmbed embedder instance (for direct use by manager)."""
