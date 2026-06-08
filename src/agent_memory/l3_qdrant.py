@@ -322,6 +322,12 @@ class L3QdrantStore:
 
         try:
             # Normalize query vector
+            # Handle generator input (e.g. from FastEmbed embedder.embed())
+            # Also flatten single-element lists (common when wrapping a 1D vector)
+            if hasattr(query_vector, '__next__'):
+                query_vector = list(query_vector)
+            if isinstance(query_vector, list) and len(query_vector) == 1:
+                query_vector = query_vector[0]
             vec = np.array(query_vector, dtype=np.float32)
             norm = np.linalg.norm(vec)
             if norm > 0:
@@ -373,6 +379,12 @@ class L3QdrantStore:
             return []
 
         results = []
+        # Handle generator input (e.g. from FastEmbed embedder.embed())
+        # Also flatten single-element lists
+        if hasattr(query_vector, '__next__'):
+            query_vector = list(query_vector)
+        if isinstance(query_vector, list) and len(query_vector) == 1:
+            query_vector = query_vector[0]
         query_arr = np.array(query_vector, dtype=np.float32)
         qnorm = np.linalg.norm(query_arr)
         if qnorm == 0:

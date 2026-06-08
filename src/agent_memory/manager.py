@@ -47,7 +47,9 @@ class MemoryManager:
         self.l1 = L1LCMCompressor()
         self.sync = SyncManager(self.l4, self.l3, embedder, memory_dir=base_dir)
         self.classifier = LibraryClassifier()
-        self.embedder = embedder or get_embedder()
+        # Use the same embedder as L3 Qdrant store (FastEmbed with correct dimensions)
+        # This ensures query vectors match stored vectors (e.g. 512-dim for bge-small-zh-v1.5)
+        self.embedder = embedder or self.l3._embedder or get_embedder()
         self._stats_cache = None
         self._stats_timestamp = None
 
