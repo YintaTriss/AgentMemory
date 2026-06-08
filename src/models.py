@@ -25,7 +25,7 @@ except ImportError:
 def _default_ulid() -> str:
     """生成默认 ULID 字符串"""
     try:
-        return str(ulid.ulid())
+        return str(ulid.ULID())
     except Exception:
         import time
         return f"00{int(time.time() * 1000):017d}"

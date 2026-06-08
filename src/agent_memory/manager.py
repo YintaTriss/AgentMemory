@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .l4_files import L4FilesStore, MemoryMeta, MemoryVec
-from .l3_lancedb import L3LanceDBStore
+from .l3_lancedb import L3LanceDBStore, BM25Indexer
 from .l1_lcm import L1LCMCompressor
 from .sync import SyncManager
 from .library import LibraryClassifier
@@ -79,6 +79,18 @@ class MemoryManager:
             safe_cat = category_path.replace("'", "''")
             filter_expr = f"category_path = '{safe_cat}'"
         results = self.l3.search(query_vector, top_k=limit, filter_expr=filter_expr)
+
+        # L3 vector search failed (LanceDB error) — detect by checking if any result
+        # has a real content match (BM25 fallback when vector scores are ~0).
+        # If vector search worked, results contain proper float scores from LanceDB.
+        # If LanceDB fell back to get_all(), scores are missing/zero.
+        needs_bm25 = (
+            len(results) > 0
+            and all(r.get("score", None) is None or r.get("score", 0) == 0 for r in results)
+        )
+        if needs_bm25:
+            results = self._bm25_rerank(query, results, top_k=limit)
+
         enriched = []
         for r in results:
             memory_id = r.get("id", "")
@@ -86,7 +98,7 @@ class MemoryManager:
             if mem:
                 meta = mem.get("meta", {})
                 enriched.append({
-                    "id": memory_id, 
+                    "id": memory_id,
                     "content": mem.get("content", ""),
                     "score": r.get("score", 0),
                     "category": meta.get("category_path", ""),
@@ -201,7 +213,34 @@ class MemoryManager:
     def _invalidate_cache(self) -> None:
         self._stats_cache = None
         self._stats_timestamp = None
-    
+
+    def _bm25_rerank(self, query: str, records: List[Dict[str, Any]],
+                     top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Pure-Python BM25 re-ranking when vector search is unavailable.
+        Uses the L3 record list directly (already fetched by l3.search fallback).
+        """
+        if not records:
+            return []
+        texts = [r.get("content", "") or "" for r in records]
+        indexer = BM25Indexer(k1=1.2, b=0.75)
+        indexer.index(texts)
+        bm25_results = indexer.search(query, top_k=top_k)
+        # Map back to full record fields
+        results = []
+        for bm in bm25_results:
+            rec = records[bm["doc_index"]]
+            results.append({
+                "id": rec.get("id", ""),
+                "content": rec.get("content", ""),
+                "score": bm["bm25_score"],
+                "bm25_score": bm["bm25_score"],
+                "importance": rec.get("importance", 0.5),
+                "category_path": rec.get("category_path", ""),
+                "created_at": rec.get("created_at", ""),
+            })
+        return results
+
     async def sync_all_memories(self) -> Dict[str, int]:
         # P0-2 fix: sync_all is now async
         return await self.sync.sync_all()

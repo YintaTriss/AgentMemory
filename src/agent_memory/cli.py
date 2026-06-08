@@ -175,7 +175,7 @@ async def cmd_add(
 
     # 保存记忆
     import ulid
-    memory_id = ulid.ulid()
+    memory_id = str(ulid.ULID())
     now = datetime.now().isoformat()
     full_meta = {
         "id": memory_id,
@@ -238,6 +238,17 @@ async def cmd_search(
                 "id": r["id"],
                 "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
                 "score": r["bm25_score"],
+                "category_path": r.get("category_path", ""),
+            }
+            for r in raw
+        ]
+    elif mode == "bm25":
+        raw = l3_store.search_bm25(query, top_k=limit)
+        results = [
+            {
+                "id": r["id"],
+                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
+                "score": r.get("bm25_score", r.get("score", 0)),
                 "category_path": r.get("category_path", ""),
             }
             for r in raw

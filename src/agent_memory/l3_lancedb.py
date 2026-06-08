@@ -50,8 +50,24 @@ class BM25Indexer:
         self._idf: Dict[str, float] = {}  # term -> IDF
 
     def _tokenize(self, text: str) -> List[str]:
-        """Split text into lowercase tokens ( alphanumeric runs)."""
-        return re.findall(r"[a-z0-9]+", text.lower())
+        """
+        Split text into tokens.
+        - English/alphanumeric: lowercase runs (original behavior)
+        - Chinese/other scripts: character bigrams (window=2) for sub-word matching
+
+        Chinese tokenization challenge: no spaces between words.
+        Solution: character bigrams capture any 2-char substring match,
+        which is sufficient for BM25's term-frequency model.
+        """
+        # English tokens
+        tokens = re.findall(r"[a-z0-9]+", text.lower())
+        # Chinese/CJK characters: collect runs of non-ASCII chars
+        cjk_runs = re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff00-\uffef]+", text)
+        for run in cjk_runs:
+            # Character bigrams for CJK text
+            for i in range(len(run) - 1):
+                tokens.append(run[i:i + 2])
+        return tokens
 
     def _compute_idf(self, term_doc_freq: Counter) -> Dict[str, float]:
         """Compute IDF for each term: log((N - n_t + 0.5) / (n_t + 0.5) + 1)."""
@@ -271,10 +287,15 @@ class L3LanceDBStore:
             return formatted
         except Exception as e:
             print(f"[L3] Search error: {e}")
-            # Fallback to JSON search on error
-            if not hasattr(self, "_fallback_data"):
-                self._init_fallback()
-            return self._search_fallback(query_vector, top_k, filter_expr)
+            # LanceDB vector search unavailable — return all L3 records with score=0
+            # to signal manager layer (which has query text) to apply BM25 re-ranking.
+            all_records = self.get_all()
+            zero_scores = []
+            for r in all_records[:top_k]:
+                rec = dict(r)
+                rec["score"] = 0.0
+                zero_scores.append(rec)
+            return zero_scores
     
     def _search_fallback(self, query_vector: List[float], top_k: int = 5,
                         filter_expr: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -374,8 +395,27 @@ class L3LanceDBStore:
         if self._use_fallback:
             return list(self._fallback_data.values())
         try:
-            return self._table.to_list()
+            # LanceDB 0.30+ uses to_arrow() instead of to_list()
+            table_data = self._table.to_arrow()
+            if not table_data or len(table_data) == 0:
+                return []
+            col_dict = table_data.to_pydict()
+            n = len(next(iter(col_dict.values())))
+            records = []
+            for i in range(n):
+                rec = {}
+                for col, vals in col_dict.items():
+                    v = vals[i]
+                    # PyArrow ListScalar needs .as_py() conversion
+                    if hasattr(v, 'as_py'):
+                        v = v.as_py()
+                    rec[col] = v
+                records.append(rec)
+            return records
         except Exception:
+            # Fallback: try JSON fallback data
+            if not hasattr(self, "_fallback_data"):
+                self._fallback_data = {}
             return list(self._fallback_data.values())
 
     def search_bm25(self, query: str, top_k: int = 5,
