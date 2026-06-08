@@ -454,16 +454,19 @@ def search(query_vector, top_k=5, filter_expr=None):
 
 ### 9.4 BM25 混合检索
 
-`L3QdrantStore` 两个方法：
+BM25 重排不在 L3 Store 层实现，而是在 `MemoryManager` 层完成：
 
-- `search_bm25(query, top_k, k1=1.2, b=0.75)` — 纯 Python BM25 索引，零额外依赖
-- `search_hybrid(query_vector, query_text, top_k, alpha=0.7)` — 加权混合检索
+- `MemoryManager._bm25_rerank(query, records, top_k)` — 当向量搜索分数全 0 时触发 BM25 重排
+- `BM25Indexer`（来自 `l3_lancedb.py`，纯 Python，零额外依赖）
+- `search_hybrid` 在 CLI 层通过 `--mode hybrid` 触发
 
 **BM25 参数**（可配置）：
 - `k1`：词频饱和参数（default 1.2），控制词频权重
 - `b`：文档长度归一化（default 0.75），控制长文档惩罚程度
 
-**混合权重**：α = 0.7（向量），1-α = 0.3（BM25），可通过 API 调整。
+**触发条件**：向量搜索返回的 top 结果 score 全部为 0 时，自动用 BM25 重排结果替代。
+
+**混合权重**：α = 0.7（向量），1-α = 0.3（BM25），通过 CLI `--mode hybrid` 或 API 参数触发。
 
 ---
 

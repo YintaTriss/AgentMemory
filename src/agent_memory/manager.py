@@ -26,12 +26,12 @@ class MemoryManager:
     Args:
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
+                  For Qdrant:  "data/qdrant" (default)
                   For LanceDB: "data/lancedb"
-                  For Qdrant:  "data/qdrant"
         embedder: Embedder instance for vectorization.
                   Defaults to HashEmbedder (offline, no API key needed).
         l3_backend: Which L3 vector store to use.
-                     "lancedb" (default) or "qdrant" (Qdrant Edge, embedded).
+                     "qdrant" (Qdrant Edge, embedded, default) or "lancedb".
     """
 
     def __init__(self, base_dir: str = "memory", db_path: str = "data/qdrant",
