@@ -21,21 +21,41 @@ from .embedder import Embedder, get_embedder
 
 
 class MemoryManager:
-    """Unified Memory Manager with async API."""
-    
+    """Unified Memory Manager with async API.
+
+    Args:
+        base_dir: L4 file storage directory.
+        db_path: L3 vector store directory.
+                  For LanceDB: "data/lancedb"
+                  For Qdrant:  "data/qdrant"
+        embedder: Embedder instance for vectorization.
+                  Defaults to HashEmbedder (offline, no API key needed).
+        l3_backend: Which L3 vector store to use.
+                     "lancedb" (default) or "qdrant" (Qdrant Edge, embedded).
+    """
+
     def __init__(self, base_dir: str = "memory", db_path: str = "data/lancedb",
-                 embedder: Optional[Embedder] = None):
+                 embedder: Optional[Embedder] = None,
+                 l3_backend: str = "lancedb"):
         self.base_dir = base_dir
         self.db_path = db_path
+        self.l3_backend = l3_backend
         self.l4 = L4FilesStore(base_dir)
-        self.l3 = L3LanceDBStore(db_path)
+
+        # Select L3 store based on backend
+        if l3_backend == "qdrant":
+            from .l3_qdrant import L3QdrantStore
+            self.l3 = L3QdrantStore(db_path=db_path)
+        else:
+            self.l3 = L3LanceDBStore(db_path)
+
         self.l1 = L1LCMCompressor()
         self.sync = SyncManager(self.l4, self.l3, embedder, memory_dir=base_dir)
         self.classifier = LibraryClassifier()
         self.embedder = embedder or get_embedder()
         self._stats_cache = None
         self._stats_timestamp = None
-    
+
     async def add(self, content: str, importance: float = 0.5,
                   category_path: Optional[str] = None, tags: Optional[List[str]] = None,
                   source: str = "manual") -> str:
@@ -43,7 +63,7 @@ class MemoryManager:
             category_path = self.classifier.classify(content)
         memory_id = self._generate_id(content)
         now = datetime.now().isoformat()
-        
+
         # Create metadata as dict (L4FilesStore expects dict)
         meta_dict = {
             "id": memory_id,
@@ -54,36 +74,34 @@ class MemoryManager:
             "source": source,
             "importance": importance,
         }
-        
+
         # Save to L4 (async)
         await self.l4.save(memory_id, content, meta_dict)
-        
-        # Sync to L3 (this also writes vec.json) — P0-2: must await since sync_one is now async
+
+        # Sync to L3 (this also writes vec.json)
         await self.sync.sync_one(memory_id)
-        
+
         self._invalidate_cache()
         return memory_id
-    
+
     async def search(self, query: str, limit: int = 5,
                     category_path: Optional[str] = None) -> List[Dict[str, Any]]:
-        # P2 latent fix: handle async embedder (DashScopeEmbedder). In practice
-        # manager always gets HashEmbedder, but be safe.
+        # Handle async embedder (DashScopeEmbedder)
         import asyncio
         if asyncio.iscoroutinefunction(self.embedder.embed):
             query_vector = await self.embedder.embed(query)
         else:
             query_vector = self.embedder.embed(query)
+
         filter_expr = None
         if category_path:
-            # Escape single quotes to prevent LanceDB injection
+            # Escape single quotes to prevent injection
             safe_cat = category_path.replace("'", "''")
             filter_expr = f"category_path = '{safe_cat}'"
+
         results = self.l3.search(query_vector, top_k=limit, filter_expr=filter_expr)
 
-        # L3 vector search failed (LanceDB error) — detect by checking if any result
-        # has a real content match (BM25 fallback when vector scores are ~0).
-        # If vector search worked, results contain proper float scores from LanceDB.
-        # If LanceDB fell back to get_all(), scores are missing/zero.
+        # L3 vector search failed — detect by zero scores and apply BM25 rerank
         needs_bm25 = (
             len(results) > 0
             and all(r.get("score", None) is None or r.get("score", 0) == 0 for r in results)
@@ -108,12 +126,9 @@ class MemoryManager:
                     "metadata": r.get("metadata", {}),
                 })
         return enriched
-    
+
     async def list(self, category_path: Optional[str] = None,
                    limit: int = 20) -> List[Dict[str, Any]]:
-        # P2-4 fix (manager.py): load each memory once instead of twice.
-        # Previous pattern: load all → filter in Python (N times for N items).
-        # New pattern: load all in one pass, then filter.
         all_ids = self.l4.list()
         mem_map = {}
         for memory_id in all_ids[:limit]:
@@ -144,14 +159,14 @@ class MemoryManager:
                 "source": meta.get("source", ""),
             })
         return memories
-    
+
     async def get(self, memory_id: str) -> Optional[Dict[str, Any]]:
         mem = await self.l4.load_existing(memory_id)
         if not mem:
             return None
         meta = mem.get("meta", {})
         return {
-            "id": memory_id, 
+            "id": memory_id,
             "content": mem.get("content", ""),
             "category": meta.get("category_path", ""),
             "tags": meta.get("tags", []),
@@ -160,57 +175,62 @@ class MemoryManager:
             "updated_at": meta.get("updated_at", ""),
             "source": meta.get("source", ""),
         }
-    
+
     async def delete(self, memory_id: str) -> bool:
         deleted = await self.l4.delete(memory_id)
         self.sync.delete_from_l3(memory_id)
         if deleted:
             self._invalidate_cache()
         return deleted
-    
+
     async def compress_for_context(self, memory_ids: List[str],
                                        query: str = "") -> str:
         """
-        Sugg-5 fix: expose query parameter so callers can use query-focused compression.
+        L1 context compression for AI prompt injection.
 
         Args:
             memory_ids: List of memory IDs to compress.
             query: Optional query string. Memories matching the query
                    receive relevance score boost in importance tier sorting.
         """
-        # P0-3 fix: L1LCMCompressor.compress() expects List[Dict] with 'content'/'meta' keys,
-        # not List[str] memory IDs.
         memories = []
         for mid in memory_ids:
             mem = await self.l4.load_existing(mid)
             if mem:
                 memories.append(mem)
         return self.l1.compress(memories, query=query)
-    
+
     async def stats(self) -> Dict[str, Any]:
         if self._stats_cache and self._stats_timestamp:
             age = (datetime.now() - self._stats_timestamp).total_seconds()
             if age < 300:
                 return self._stats_cache
+
         l4_stats = self.l4.get_stats()
         l3_count = self.l3.count()
+        embedder_name = "hash-v1"
+        dims = self.embedder.dim
+        if self.l3_backend == "qdrant":
+            embedder_name = f"fastembed-{getattr(self.l3, 'embedder_model', 'unknown')}"
+            dims = getattr(self.l3, 'vector_dim', dims)
+
         stats = {
             "total_memories": l4_stats["memory_count"],
             "l3_memories": l3_count,
             "storage_bytes": l4_stats["total_size_bytes"],
-            "embedder": "hash-v1",
-            "embedding_dims": self.embedder.dim,
+            "embedder": embedder_name,
+            "embedding_dims": dims,
             "categories": self.l4.get_categories(),
+            "l3_backend": self.l3_backend,
         }
         self._stats_cache = stats
         self._stats_timestamp = datetime.now()
         return stats
-    
+
     def _generate_id(self, content: str) -> str:
-        # P0-3 fix: use timestamp+random so same content gets unique IDs
         import time, secrets
         return f"mem_{int(time.time()*1000):013x}_{secrets.token_hex(4)}"
-    
+
     def _invalidate_cache(self) -> None:
         self._stats_cache = None
         self._stats_timestamp = None
@@ -218,8 +238,7 @@ class MemoryManager:
     def _bm25_rerank(self, query: str, records: List[Dict[str, Any]],
                      top_k: int = 5) -> List[Dict[str, Any]]:
         """
-        Pure-Python BM25 re-ranking when vector search is unavailable.
-        Uses the L3 record list directly (already fetched by l3.search fallback).
+        Pure-Python BM25 re-ranking when vector search returns zero scores.
         """
         if not records:
             return []
@@ -227,7 +246,6 @@ class MemoryManager:
         indexer = BM25Indexer(k1=1.2, b=0.75)
         indexer.index(texts)
         bm25_results = indexer.search(query, top_k=top_k)
-        # Map back to full record fields
         results = []
         for bm in bm25_results:
             rec = records[bm["doc_index"]]
@@ -243,10 +261,17 @@ class MemoryManager:
         return results
 
     async def sync_all_memories(self) -> Dict[str, int]:
-        # P0-2 fix: sync_all is now async
         return await self.sync.sync_all()
 
 
 def create_memory_manager(base_dir: str = "memory",
-                          db_path: str = "data/lancedb") -> MemoryManager:
-    return MemoryManager(base_dir=base_dir, db_path=db_path)
+                          db_path: str = "data/lancedb",
+                          l3_backend: str = "lancedb") -> MemoryManager:
+    """Create a MemoryManager instance.
+
+    Args:
+        base_dir: L4 file storage directory.
+        db_path: L3 vector store directory.
+        l3_backend: "lancedb" (default) or "qdrant" (Qdrant Edge embedded).
+    """
+    return MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)

@@ -43,6 +43,11 @@ lancedb = [
     "lancedb>=0.1",
     "numpy>=1.21",
 ]
+qdrant = [
+    "qdrant-client>=1.18.0",
+    "fastembed>=0.8.0",
+    "numpy>=1.21",
+]
 
 [project.scripts]
 agentmemory = "src.cli:main"

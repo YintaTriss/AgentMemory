@@ -35,6 +35,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--base-dir", default=DEFAULT_BASE_DIR, help="记忆存储目录")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式（机器可读）")
+    parser.add_argument(
+        "--l3-backend",
+        choices=["lancedb", "qdrant"],
+        default="lancedb",
+        help="L3 向量存储引擎: lancedb (默认) 或 qdrant (Qdrant Edge 嵌入式)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", title="commands", required=True)
 
@@ -142,6 +148,16 @@ def _print_result(data: dict, as_json: bool) -> None:
                 print(f"  {key}: {val}")
 
 
+def _get_l3_store(db_path: str, l3_backend: str):
+    """根据 l3_backend 返回对应的 L3 store 实例。"""
+    if l3_backend == "qdrant":
+        from .l3_qdrant import L3QdrantStore
+        return L3QdrantStore(db_path=db_path)
+    else:
+        from .l3_lancedb import L3LanceDBStore
+        return L3LanceDBStore(db_path=db_path)
+
+
 async def cmd_add(
     content: str,
     importance: float,
@@ -149,7 +165,8 @@ async def cmd_add(
     category: Optional[str],
     source: str,
     base_dir: str,
-    as_json: bool
+    as_json: bool,
+    l3_backend: str = "lancedb",
 ) -> None:
     """处理 add 命令"""
     store = L4FilesStore(base_dir=base_dir)
@@ -187,10 +204,11 @@ async def cmd_add(
 
     # 同步到 L3（向量存储）
     import os as _os
-    _db_path = _os.path.join(_os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
-    _l3 = L3LanceDBStore(db_path=_db_path)
-    # Sugg-3 fix: use auto backend (returns HashEmbedder when no API key, matching
-    # the documented contract). The embed_sync fallback below handles async embedders.
+    _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
+    _db_path = _os.path.join(_os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
+    _l3 = _get_l3_store(_db_path, l3_backend)
+    # Use auto backend (returns HashEmbedder when no API key).
+    # embed_sync fallback handles async embedders.
     _embedder = get_embedder()
     _embed_fn = _embedder.embed_sync if hasattr(_embedder, "embed_sync") else _embedder.embed
     _vec = _embed_fn(content)
@@ -220,30 +238,38 @@ async def cmd_search(
     mode: str,
     base_dir: str,
     as_json: bool,
+    l3_backend: str = "lancedb",
 ) -> None:
     """处理 search 命令 — 支持 vector / bm25 / hybrid 三种模式"""
     import os
-    from .l3_lancedb import L3LanceDBStore
     from .embedder import get_embedder
+    from .l3_lancedb import L3LanceDBStore, BM25Indexer
 
     store = L4FilesStore(base_dir=base_dir)
     embedder = get_embedder()
-    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
-    l3_store = L3LanceDBStore(db_path=db_path)
+    _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
+    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
+    l3_store = _get_l3_store(db_path, l3_backend)
 
     if mode == "bm25":
-        raw = l3_store.search_bm25(query, top_k=limit)
-        results = [
-            {
-                "id": r["id"],
-                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
-                "score": r["bm25_score"],
-                "category_path": r.get("category_path", ""),
-            }
-            for r in raw
-        ]
-    elif mode == "bm25":
-        raw = l3_store.search_bm25(query, top_k=limit)
+        # BM25: use pure Python BM25 (works with any L3 backend)
+        all_records = l3_store.get_all()
+        if not all_records:
+            raw = []
+        else:
+            texts = [r.get("content", "") or "" for r in all_records]
+            indexer = BM25Indexer(k1=1.2, b=0.75)
+            indexer.index(texts)
+            bm25_results = indexer.search(query, top_k=limit)
+            raw = []
+            for bm in bm25_results:
+                rec = all_records[bm["doc_index"]]
+                raw.append({
+                    "id": rec.get("id", ""),
+                    "content": rec.get("content", ""),
+                    "bm25_score": bm["bm25_score"],
+                    "category_path": rec.get("category_path", ""),
+                })
         results = [
             {
                 "id": r["id"],
@@ -255,7 +281,11 @@ async def cmd_search(
         ]
     elif mode == "hybrid":
         query_vector = embedder.embed(query)
-        raw = l3_store.search_hybrid(query_vector, query, top_k=limit)
+        # Hybrid: LanceDB has search_hybrid; Qdrant falls back to vector search
+        if hasattr(l3_store, "search_hybrid"):
+            raw = l3_store.search_hybrid(query_vector, query, top_k=limit)
+        else:
+            raw = l3_store.search(query_vector, top_k=limit)
         results = [
             {
                 "id": r["id"],
@@ -608,6 +638,7 @@ def main() -> int:
     command = kwargs.pop("command")
     as_json = kwargs.pop("json", False)
     base_dir = kwargs.pop("base_dir", DEFAULT_BASE_DIR)
+    l3_backend = kwargs.pop("l3_backend", "lancedb")
 
     if command == "sign":
         cmd_sign(kwargs["dir"], kwargs["key"], as_json)
@@ -654,6 +685,7 @@ def main() -> int:
             source=kwargs.get("source", "cli"),
             base_dir=base_dir,
             as_json=as_json,
+            l3_backend=l3_backend,
         )) or 0
 
     if command == "search":
@@ -664,6 +696,7 @@ def main() -> int:
             mode=kwargs.get("mode", "vector"),
             base_dir=base_dir,
             as_json=as_json,
+            l3_backend=l3_backend,
         )) or 0
 
     if command == "list":

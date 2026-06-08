@@ -3,7 +3,7 @@ AgentMemory v0.3 - 双轨 + 图书馆记忆系统
 
 Simplified 3-layer architecture:
 - L4: File System (md + meta.json)
-- L3: LanceDB Vector Store
+- L3: Vector Store (LanceDB or Qdrant Edge)
 - L1: LCM Compressor
 
 Design Philosophy: Memory as Library
@@ -13,12 +13,17 @@ Design Philosophy: Memory as Library
 Components:
 - MemoryManager: Unified async API
 - L4FilesStore: File system storage
-- L3LanceDBStore: Vector semantic search
+- L3LanceDBStore: LanceDB vector search (default)
+- L3QdrantStore: Qdrant Edge vector search (Rust内核，高性能)
 - L1LCMCompressor: Context compression
 - SyncManager: L4 ↔ L3 synchronization
 - LibraryClassifier: Automatic categorization
 - Embedder: Vector embeddings (HashEmbedder, DashScopeEmbedder)
 - IntegrityVerifier: HMAC signature verification
+
+L3 Backend Selection:
+- LanceDB (default): pip install agentmemory[lancedb]
+- Qdrant Edge: pip install agentmemory[qdrant]
 """
 
 __version__ = "0.3.4"
@@ -29,6 +34,12 @@ __license__ = "MIT"
 from .manager import MemoryManager, create_memory_manager
 from .l4_files import L4FilesStore, MemoryMeta, MemoryVec
 from .l3_lancedb import L3LanceDBStore
+try:
+    from .l3_qdrant import L3QdrantStore
+    _QDRANT_AVAILABLE = True
+except ImportError:
+    L3QdrantStore = None
+    _QDRANT_AVAILABLE = False
 from .l1_lcm import L1LCMCompressor, FactType
 from .sync import SyncManager
 from .library import LibraryClassifier
@@ -44,6 +55,8 @@ __all__ = [
     # Storage layers
     "L4FilesStore",
     "L3LanceDBStore",
+    "L3QdrantStore",
+    "_QDRANT_AVAILABLE",
     # Compression
     "L1LCMCompressor",
     "FactType",
