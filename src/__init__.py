@@ -1,10 +1,43 @@
 """
-memory-hermes: 顶尖记忆技能
-融合 Hermes + Mem0 优点，四层闭环记忆架构
+AgentMemory v0.3 - 双轨 + 图书馆记忆系统
+统一导出接口，代理到 src.agent_memory
 """
 
-__version__ = "1.0.0"
+__version__ = "0.3.4"
 
-from .memory_manager import MemoryHermes
+from src.agent_memory import (
+    MemoryManager,
+    create_memory_manager,
+    L4FilesStore,
+    L3LanceDBStore,
+    L1LCMCompressor,
+    FactType,
+    SyncManager,
+    LibraryClassifier,
+    Embedder,
+    HashEmbedder,
+    DashScopeEmbedder,
+    get_embedder,
+    MemoryMeta,
+    MemoryVec,
+    integrity,
+)
 
-__all__ = ["MemoryHermes"]
+__all__ = [
+    "__version__",
+    "MemoryManager",
+    "create_memory_manager",
+    "L4FilesStore",
+    "L3LanceDBStore",
+    "L1LCMCompressor",
+    "FactType",
+    "SyncManager",
+    "LibraryClassifier",
+    "Embedder",
+    "HashEmbedder",
+    "DashScopeEmbedder",
+    "get_embedder",
+    "MemoryMeta",
+    "MemoryVec",
+    "integrity",
+]
