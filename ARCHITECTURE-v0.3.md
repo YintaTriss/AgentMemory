@@ -212,5 +212,140 @@ data/lancedb/            # LanceDB 数据目录（已删除，不再使用）
 
 ---
 
+---
+
+## 十二、团队协作设计（当前状态）
+
+### 现状
+
+**单用户、单 Agent 记忆系统。** 多人/多 Agent 通过共享 `memory/` 文件夹实现记忆共享。
+
+### 当前协作机制
+
+| 机制 | 实现 | 说明 |
+|------|------|------|
+| 共享存储 | 共享 `memory/` 文件夹 | 通过 NAS 或网络文件系统 |
+| 并发读取 | `portalocker.SHARED` | 允许多进程并发读取 |
+| 并发写入 | `portalocker.EXCLUSIVE` | 文件锁保证写入安全 |
+| 命名空间 | 文件夹目录结构 | 按 `category/` 子目录隔离 |
+
+### 设计缺失（未来版本规划）
+
+| 功能 | 当前 | 理想 |
+|------|------|------|
+| 用户认证 | ❌ 无 | 用户名+密码或 API Key |
+| 权限控制 | ❌ 无 | ACL（读/写/管理）|
+| 记忆隔离 | ❌ 无（全局共享）| 多租户 namespace |
+| 冲突解决 | ❌ 无 | 最后写入优先 or 版本向量 |
+| 操作审计 | ❌ 无 | 谁、何时、做了什么 |
+
+### 推荐的团队使用方式
+
+```
+方案A（当前可用）：共享文件夹
+  memory/
+  ├── team-shared/      # 团队公共记忆
+  ├── agent-a/          # Agent A 私有
+  └── agent-b/          # Agent B 私有
+
+方案B（进程隔离）：每个 Agent 独立 memory 文件夹，通过消息队列共享摘要
+```
+
+---
+
+## 十三、可观测性设计（生产级）
+
+### 当前状态
+
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| 基础 stats | ✅ | `/stats`，记忆数量/存储大小 |
+| 健康检查 | ✅ | `/health` |
+| 结构化日志 | ❌ | 无，按行文本日志 |
+| Prometheus metrics | ❌ | 无 |
+| 链路追踪 | ❌ | 无 |
+| 告警机制 | ❌ | 无 |
+
+### 目标：生产级可观测性（v0.4 规划）
+
+#### 1. 结构化日志
+
+```python
+# 目标格式：JSON Lines
+{
+  "level": "INFO",
+  "timestamp": "2026-06-08T21:00:00+08:00",
+  "event": "memory_search",
+  "memory_id": "mem_xxx",
+  "query": "翻译模型",
+  "mode": "hybrid",
+  "score": 0.6981,
+  "latency_ms": 12,
+  "agent_id": "agent-001"
+}
+```
+
+#### 2. Prometheus Metrics（关键指标）
+
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `agentmemory_memories_total` | Gauge | 记忆总数 |
+| `agentmemory_search_requests_total` | Counter | 搜索请求数（按 mode 标签）|
+| `agentmemory_search_latency_seconds` | Histogram | 搜索延迟分布 |
+| `agentmemory_search_score` | Histogram | 搜索分数分布 |
+| `agentmemory_add_latency_seconds` | Histogram | 添加延迟 |
+| `agentmemory_l3_qdrant_available` | Gauge | Qdrant 可用性（1/0）|
+| `agentmemory_bm25_fallback_total` | Counter | BM25 兜底触发次数 |
+| `agentmemory_storage_bytes` | Gauge | 存储大小 |
+
+#### 3. 健康检查增强
+
+```
+GET /health
+  → 浅层：进程存活
+  → 深层：可写入、可搜索、可查询向量维度
+
+GET /healthz
+  → L1: LCM 压缩器状态
+  → L3: Qdrant 连接 + collection 存在
+  → L4: memory/ 可写 + 文件锁正常
+```
+
+#### 4. OpenTelemetry 追踪（可选）
+
+```
+trace_id: 全局请求ID（贯穿 add → search → retrieve）
+span: add
+  span: l1_compress
+  span: l4_write
+  span: l3_index
+span: search
+  span: l3_vector_search (latency, score)
+  span: bm25_fallback (if triggered)
+  span: l4_retrieve
+```
+
+#### 5. 告警规则
+
+| 规则 | 条件 | 严重度 |
+|------|------|--------|
+| Qdrant 不可用 | `l3_qdrant_available == 0` | Critical |
+| BM25 兜底率异常 | `bm25_fallback_total / search_total > 0.5` | Warning |
+| 搜索延迟过高 | `search_latency_p95 > 500ms` | Warning |
+| 存储接近上限 | `storage_bytes > 10GB` | Info |
+
+### 实现优先级
+
+| 优先级 | 内容 | 工作量 |
+|--------|------|--------|
+| P0 | 结构化 JSON 日志（替换 print）| 0.5 天 |
+| P0 | `/healthz` 深层健康检查 | 0.5 天 |
+| P1 | Prometheus metrics 端点 | 1 天 |
+| P1 | 搜索延迟+分数指标 | 0.5 天 |
+| P2 | OpenTelemetry 追踪 | 2 天 |
+| P3 | 告警规则引擎 | 2 天 |
+
+---
+
 _最后更新：2026-06-08 v0.3.4_
 _架构师：楚灵 ⚔️_
