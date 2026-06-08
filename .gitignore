@@ -41,10 +41,14 @@ memory/*.md
 memory/*.vec.json
 memory/*.meta.json
 memory/memory/
+memory/.lock_*
 
 # Data directory
 data/*.json
 data/*.arrow
+data/lancedb/
+data/lancedb_test/
+data/qdrant/
 
 # Test coverage
 .coverage
