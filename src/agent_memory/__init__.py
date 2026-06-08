@@ -25,7 +25,7 @@ L3 Backend: Qdrant Edge (默认)
 - 向量语义搜索 primary，BM25 关键词兜底
 """
 
-__version__ = "0.3.4"
+__version__ = "2.0.2"
 __author__ = "楚灵"
 __license__ = "MIT"
 
