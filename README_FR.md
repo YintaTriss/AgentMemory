@@ -52,10 +52,10 @@ Même mémoire :
           ┌──────────────────┴──────────────────┐
           ▼                                      ▼
 ┌─────────────────────┐              ┌─────────────────────────┐
-│   L4FilesStore      │              │   L3LanceDBStore        │
+│   L4FilesStore      │              │   L3QdrantStore        │
 │   (Persistance Fichier)              │   (Recherche vectorielle)│
 │                     │              │                         │
-│  memory/<id>.md     │◄──── sync ──►│  LanceDB Table         │
+│  memory/<id>.md     │◄──── sync ──►│  Qdrant Edge         │
 │  memory/<id>.meta   │              │  (Similarité sémantique)│
 │  memory/<id>.vec.json              │                         │
 └─────────────────────┘              └─────────────────────────┘
@@ -75,7 +75,7 @@ Même mémoire :
 | Couche | Composant | Responsabilité |
 |--------|-----------|----------------|
 | **L4** | `L4FilesStore` | `.md` contenu + `.meta.json` métadonnées + `.vec.json` vecteurs, persistance système de fichiers |
-| **L3** | `L3LanceDBStore` | Recherche vectorielle LanceDB (bascule automatique vers JSON + numpy pur si indisponible), recherche hybride BM25 |
+| **L3** | `L3QdrantStore` | Recherche vectorielle Qdrant Edge (bascule automatique vers JSON + numpy pur si indisponible), recherche hybride BM25 |
 | **L1** | `L1LCMCompressor` | Compression mémoire en résumé + liste d'entités, utilisée pour l'injection dans les prompts IA, amélioration de la pertinence par query |
 | **L3** | `SyncManager` | Synchronisation double piste L4 ↔ L3, détection auto mots-clés sync, verrouillage fichier portalocker |
 | **L3** | `LibraryClassifier` | Classification automatique 5 catégories de premier niveau, scoring normalisé par mots-clés, tokenisation mise en cache |
@@ -107,7 +107,7 @@ AI/Agent/SystèmeMémoire/VCP                      ✅ 4 couches
 |-----------|---------|-------------|
 | `MemoryManager` | `manager.py` | API async unifiée : add/get/delete/search/list/compress |
 | `L4FilesStore` | `l4_files.py` | Stockage triple fichier md + meta.json + vec.json, verrouillage fichier portalocker |
-| `L3LanceDBStore` | `l3_lancedb.py` | Recherche vectorielle LanceDB + JSON Fallback + Recherche hybride BM25 |
+| `L3QdrantStore` | `l3_qdrant.py` | Recherche vectorielle Qdrant Edge + JSON Fallback + Recherche hybride BM25 |
 | `L1LCMCompressor` | `l1_lcm.py` | Compression contexte, extraction d'entités FactType, amélioration pertinence query |
 | `SyncManager` | `sync.py` | Synchronisation double piste L4 ↔ L3, détection auto mots-clés sync |
 | `LibraryClassifier` | `library.py` | Classification par mots-clés 5 catégories, validation chemin hiérarchique, tokenisation mise en cache |
@@ -271,7 +271,7 @@ def _relevance_score(mem):
 | **trust_score** | `sync.py` | < 0.2 rejette l'écriture L3, ≤ 0.35 marque flagged + avertit |
 | **Vérification HMAC** | `integrity.py` | Signature HMAC-SHA256, écriture `signed_at` dans `.meta.json` |
 | **Validation API Key** | `embedder.py` | `DashScopeEmbedder.__init__` valide immédiatement, lève RuntimeError si absent |
-| **Protection Injection LanceDB** | `web.py` / `cli.py` | Les guillemets simples dans category_path sont échappés en `''` (standard SQL) |
+| **Protection Injection Qdrant Edge** | `web.py` / `cli.py` | Les guillemets simples dans category_path sont échappés en `''` (standard SQL) |
 | **Écritures Atomiques** | `l4_files.py` | tempfile + os.replace — pas de fichiers temporaires même en cas de crash |
 | **Verrouillage Fichier** | `l4_files.py` | Verrou exclusif portalocker, opérations d'écriture mutuellement exclusives |
 
@@ -314,11 +314,11 @@ pydantic>=2.5    # Validation données (requis runtime)
 
 ```bash
 pip install agentmemory[web]     # Support API Web (FastAPI + uvicorn)
-pip install agentmemory[lancedb] # Base de données vectorielle LanceDB (scénarios haute performance)
+pip install agentmemory[qdrant] # Base de données vectorielle Qdrant Edge (scénarios haute performance)
 pip install agentmemory[dev]     # Dépendances développement (pytest etc.)
 ```
 
-> Quand LanceDB est indisponible (non installé), le système bascule automatiquement vers JSON pur + numpy — zéro dépendance supplémentaire pour fonctionner.
+> Quand Qdrant est indisponible (non installé), le système bascule automatiquement vers JSON pur + numpy — zéro dépendance supplémentaire pour fonctionner.
 
 ### Sélection Embedder
 
@@ -343,7 +343,7 @@ mm = MemoryManager(embedder=get_embedder())
 | Variable | Défaut | Description |
 |----------|--------|-------------|
 | `AGENT_MEMORY_DIR` | `memory` | Répertoire de stockage mémoire |
-| `AGENT_MEMORY_DATA_DIR` | `data` | Répertoire données vectorielles (table LanceDB / JSON Fallback) |
+| `AGENT_MEMORY_DATA_DIR` | `data` | Répertoire données vectorielles (Qdrant Edge / JSON Fallback) |
 | `EMBEDDING_API_KEY` | - | API OpenAI-Compatible (recommandé ; fonctionne avec n'importe quel provider compatible) |
 | `DASHSCOPE_API_KEY` | - | Compatibilité arrière, choisir avec `EMBEDDING_API_KEY` |
 | `OPENAI_API_KEY` | - | Compatibilité arrière |
@@ -587,7 +587,7 @@ Search: memory_search query="date compétition" limit=5 mode="hybrid"
 | Suppression mécanisme transition phase | Fichiers + vecteurs toujours double piste | Vérification VCP : transition de phase non nécessaire |
 | Contrôle écriture concurrente | Verrous fichier portalocker | Scénarios d'écriture concurrente multi-Agent |
 | Embedder par défaut Hash | Zéro dépendance, déterministe | 生非异也，善假于物也 |
-| LanceDB prioritaire + JSON Fallback | Bascule auto si LanceDB indisponible | LanceDB pour haute performance, JSON pour zéro dépendance |
+| Qdrant prioritaire + JSON Fallback | Bascule auto si Qdrant indisponible | Qdrant Edge pour haute performance, JSON pour zéro dépendance |
 | Recherche hybride BM25 | Implémentation Python pur, zéro déps supplémentaire | Complément recherche par mot-clé pur, sans modèle vectoriel |
 | min_depth=3 | Structure 3 niveaux bibliothèque/étagère/livre | Garantit granularité mémoire ; empêche le niveau supérieur d'être trop vague |
 

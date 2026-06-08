@@ -52,10 +52,10 @@ AgentMemory의 답: **두 트랙이 공존, 절대 타협하지 않음.**
           ┌──────────────────┴──────────────────┐
           ▼                                      ▼
 ┌─────────────────────┐              ┌─────────────────────────┐
-│   L4FilesStore      │              │   L3LanceDBStore        │
+│   L4FilesStore      │              │   L3QdrantStore        │
 │   (파일 지속성)       │              │   (벡터 시맨틱 검색)      │
 │                     │              │                         │
-│  memory/<id>.md     │◄──── sync ──►│  LanceDB Table         │
+│  memory/<id>.md     │◄──── sync ──►│  Qdrant Edge         │
 │  memory/<id>.meta   │              │  (의미 유사도 검색)       │
 │  memory/<id>.vec.json              │                         │
 └─────────────────────┘              └─────────────────────────┘
@@ -75,7 +75,7 @@ AgentMemory의 답: **두 트랙이 공존, 절대 타협하지 않음.**
 | 층 | 컴포넌트 | 책임 |
 |----|---------|------|
 | **L4** | `L4FilesStore` | `.md` 콘텐츠 + `.meta.json` 메타데이터 + `.vec.json` 벡터, 파일 시스템 지속성 |
-| **L3** | `L3LanceDBStore` | LanceDB 벡터 검색(사용 불가 시 자동 Pure JSON + numpy 폴백), BM25 하이브리드 검색 |
+| **L3** | `L3QdrantStore` | Qdrant Edge 벡터 검색(사용 불가 시 자동 Pure JSON + numpy 폴백), BM25 하이브리드 검색 |
 | **L1** | `L1LCMCompressor` | 기억을 요약 + 엔티티 목록으로 압축, AI 프롬프트 주입 시 사용, query 관련성 향상 지원 |
 | **L3** | `SyncManager` | L4 ↔ L3 듀얼 트랙 동기화, auto_sync 키워드 감지, portalocker 파일 잠금 |
 | **L3** | `LibraryClassifier` | 5대 최상위 카테고리 자동 분류, 키워드 정규화 점수화, 캐시 토큰화 |
@@ -107,7 +107,7 @@ AI/Agent/기억시스템/VCP                      ✅ 4층
 |---------|------|------|
 | `MemoryManager` | `manager.py` | 통합 비동기 API: add/get/delete/search/list/compress |
 | `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 삼중 파일 저장소, portalocker 파일 잠금 |
-| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 벡터 검색 + JSON 폴백 + BM25 하이브리드 검색 |
+| `L3QdrantStore` | `l3_qdrant.py` | Qdrant Edge 벡터 검색 + JSON 폴백 + BM25 하이브리드 검색 |
 | `L1LCMCompressor` | `l1_lcm.py` | 컨텍스트 압축, FactType 엔티티 추출, query 관련성 향상 |
 | `SyncManager` | `sync.py` | L4 ↔ L3 듀얼 트랙 동기화, auto_sync 키워드 감지 |
 | `LibraryClassifier` | `library.py` | 5대 카테고리 키워드 분류, 계층 경로 검증, 캐시 토큰화 |
@@ -271,7 +271,7 @@ def _relevance_score(mem):
 | **trust_score** | `sync.py` | < 0.2는 L3 쓰기 거부, ≤ 0.35는 flagged 표시 및 경고 |
 | **HMAC 검증** | `integrity.py` | HMAC-SHA256 서명, `.meta.json`의 `signed_at` 필드에 기록 |
 | **API Key 검증** | `embedder.py` | `DashScopeEmbedder.__init__` 즉시 검증, 없을 시 RuntimeError 발생 |
-| **LanceDB 인젝션 보호** | `web.py` / `cli.py` | category_path의 작은따옴표를 `''`로 이스케이프(SQL 표준) |
+| **Qdrant Edge 인젝션 보호** | `web.py` / `cli.py` | category_path의 작은따옴표를 `''`로 이스케이프(SQL 표준) |
 | **원자적 쓰기** | `l4_files.py` | tempfile + os.replace — 프로세스 크래시해도 더티 파일 없음 |
 | **파일 잠금** | `l4_files.py` | portalocker 배타적 잠금, 쓰기 작업은 상호 배제 |
 
@@ -314,11 +314,11 @@ pydantic>=2.5    # 데이터 검증(런타임 필수)
 
 ```bash
 pip install agentmemory[web]     # Web API 지원(FastAPI + uvicorn)
-pip install agentmemory[lancedb] # LanceDB 벡터 데이터베이스(고성능 시나리오)
+pip install agentmemory[qdrant] # Qdrant Edge 벡터 데이터베이스(고성능 시나리오)
 pip install agentmemory[dev]     # 개발 의존성(pytest 등)
 ```
 
-> LanceDB 사용 불가 시(설치되지 않음), 시스템은 자동으로 Pure JSON + numpy로 폴백—추가 의존성 없이 실행 가능.
+> Qdrant 사용 불가 시(설치되지 않음), 시스템은 자동으로 Pure JSON + numpy로 폴백—추가 의존성 없이 실행 가능.
 
 ### Embedder 선택
 
@@ -343,7 +343,7 @@ mm = MemoryManager(embedder=get_embedder())
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `AGENT_MEMORY_DIR` | `memory` | 기억 저장 디렉토리 |
-| `AGENT_MEMORY_DATA_DIR` | `data` | 벡터 데이터 디렉토리(LanceDB 테이블 / JSON 폴백) |
+| `AGENT_MEMORY_DATA_DIR` | `data` | 벡터 데이터 디렉토리(Qdrant Edge / JSON 폴백) |
 | `EMBEDDING_API_KEY` | - | OpenAI-Compatible API(권장, 임의의 호환 provider 동작) |
 | `DASHSCOPE_API_KEY` | - | 하위 호환, `EMBEDDING_API_KEY`와 선택 |
 | `OPENAI_API_KEY` | - | 하위 호환 |
@@ -587,7 +587,7 @@ Search: memory_search query="성과 일정" limit=5 mode="hybrid"
 | 상변화 메커니즘 제거 | 파일+벡터는 항상 듀얼 트랙 | VCP 검증: 상변화 불필요 |
 | 동시 쓰기 제어 | portalocker 파일 잠금 | 멀티 Agent 동시 쓰기 시나리오 |
 | Embedder 기본값 Hash | 의존성 0, 결정론적 | 生非異也，善假於物也 |
-| LanceDB 우선 + JSON 폴백 | LanceDB 사용 불가 시 자동 폴백 | 고성능 시나리오는 LanceDB, 의존성 0 시나리오는 JSON |
+| Qdrant 우선 + JSON 폴백 | Qdrant 사용 불가 시 자동 폴백 | 고성능 시나리오는 Qdrant Edge, 의존성 0 시나리오는 JSON |
 | BM25 하이브리드 검색 | 순수 Python 구현, 추가 의존성 0 | 키워드 검색 시나리오 보완, 벡터 모델 불필요 |
 | min_depth=3 | 도서관/서가/책 3층 구조 | 기억 그레뉼라리티 보장, 최상위가 너무 포괄적 방지 |
 

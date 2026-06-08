@@ -52,10 +52,10 @@ AgentMemory 的答案：**雙軌並存，永不取捨。**
           ┌──────────────────┴──────────────────┐
           ▼                                      ▼
 ┌─────────────────────┐              ┌─────────────────────────┐
-│   L4FilesStore      │              │   L3LanceDBStore        │
+│   L4FilesStore      │              │   L3QdrantStore        │
 │   （文件持久化）      │              │   （向量語義搜索）        │
 │                     │              │                         │
-│  memory/<id>.md     │◄──── sync ──►│  LanceDB Table         │
+│  memory/<id>.md     │◄──── sync ──►│  Qdrant Edge         │
 │  memory/<id>.meta   │              │  (語義相似度檢索)        │
 │  memory/<id>.vec.json              │                         │
 └─────────────────────┘              └─────────────────────────┘
@@ -75,7 +75,7 @@ AgentMemory 的答案：**雙軌並存，永不取捨。**
 | 層級 | 組件 | 職責 |
 |------|------|------|
 | **L4** | `L4FilesStore` | `.md` 內容 + `.meta.json` 元數據 + `.vec.json` 向量，檔案系統持久化 |
-| **L3** | `L3LanceDBStore` | LanceDB 向量搜索（不可用時自動降級為純 JSON + numpy），支援 BM25 混合檢索 |
+| **L3** | `L3QdrantStore` | Qdrant Edge 向量搜索（不可用時自動降級為純 JSON + numpy），支援 BM25 混合檢索 |
 | **L1** | `L1LCMCompressor` | 記憶壓縮為摘要 + 實體列表，注入 AI prompt 時使用，支援 query 相關性增強 |
 | **L3** | `SyncManager` | L4 ↔ L3 雙軌同步，自動同步關鍵詞檢測，portalocker 檔案鎖 |
 | **L3** | `LibraryClassifier` | 5 大頂層類自動分類，關鍵詞歸一化評分，緩存分詞 |
@@ -107,7 +107,7 @@ AI/Agent/記憶系統/VCP                      ✅ 4 層
 |------|------|------|
 | `MemoryManager` | `manager.py` | 統一異步 API，add/get/delete/search/list/compress |
 | `L4FilesStore` | `l4_files.py` | md + meta.json + vec.json 三檔案存儲，portalocker 檔案鎖 |
-| `L3LanceDBStore` | `l3_lancedb.py` | LanceDB 向量搜索 + JSON Fallback + BM25 混合檢索 |
+| `L3QdrantStore` | `l3_qdrant.py` | Qdrant Edge 向量搜索 + JSON Fallback + BM25 混合檢索 |
 | `L1LCMCompressor` | `l1_lcm.py` | 上下文壓縮，FactType 實體提取，query 相關性增強 |
 | `SyncManager` | `sync.py` | L4 ↔ L3 雙軌同步，auto_sync 關鍵詞檢測 |
 | `LibraryClassifier` | `library.py` | 5 大類關鍵詞分類，層級路徑驗證，緩存分詞 |
@@ -271,7 +271,7 @@ def _relevance_score(mem):
 | **trust_score** | `sync.py` | < 0.2 拒絕寫入 L3，≤ 0.35 標記 flagged 並警告 |
 | **HMAC 驗證** | `integrity.py` | HMAC-SHA256 簽名，寫入 `.meta.json` 的 `signed_at` 欄位 |
 | **API Key 校驗** | `embedder.py` | `DashScopeEmbedder.__init__` 立即校驗，缺失拋 RuntimeError |
-| **LanceDB 注入防護** | `web.py` / `cli.py` | category_path 中單引號轉義為 `''`（SQL 標準轉義）|
+| **Qdrant Edge 注入防護** | `web.py` / `cli.py` | category_path 中單引號轉義為 `''`（SQL 標準轉義）|
 | **原子寫入** | `l4_files.py` | tempfile + os.replace，進程崩潰也不留髒檔案 |
 | **檔案鎖** | `l4_files.py` | portalocker 獨占鎖，寫操作互斥 |
 
@@ -314,11 +314,11 @@ pydantic>=2.5    # 數據驗證（運行時必需）
 
 ```bash
 pip install agentmemory[web]     # Web API 支援（fastapi + uvicorn）
-pip install agentmemory[lancedb] # LanceDB 向量資料庫（高效能場景）
+pip install agentmemory[qdrant] # Qdrant Edge 向量資料庫（高效能場景）
 pip install agentmemory[dev]    # 開發依賴（pytest 等）
 ```
 
-> LanceDB 不可用時（未安裝），系統自動降級為純 JSON + numpy 實現，零額外依賴即可運行。
+> Qdrant 不可用時（未安裝），系統自動降級為純 JSON + numpy 實現，零額外依賴即可運行。
 
 ### Embedder 選擇
 
@@ -343,7 +343,7 @@ mm = MemoryManager(embedder=get_embedder())
 | 變數 | 預設 | 說明 |
 |------|------|------|
 | `AGENT_MEMORY_DIR` | `memory` | 記憶存儲目錄 |
-| `AGENT_MEMORY_DATA_DIR` | `data` | 向量數據目錄（LanceDB 表 / JSON Fallback） |
+| `AGENT_MEMORY_DATA_DIR` | `data` | 向量數據目錄（Qdrant Edge / JSON Fallback） |
 | `EMBEDDING_API_KEY` | - | OpenAI-Compatible API（推薦，支援任意相容 provider） |
 | `DASHSCOPE_API_KEY` | - | 向後相容，與 `EMBEDDING_API_KEY` 二選一 |
 | `OPENAI_API_KEY` | - | 向後相容 |
@@ -587,7 +587,7 @@ Search: memory_search query="省賽時間" limit=5 mode="hybrid"
 | 去掉了相變機制 | 檔案 + 向量永遠是雙軌 | VCP 驗證：不需要相變 |
 | 並發寫入控制 | portalocker 檔案鎖 | 多 Agent 並發寫入場景 |
 | Embedder 預設 Hash | 零依賴、確定性 | 生非異也，善假於物也 |
-| LanceDB 優先 + JSON Fallback | LanceDB 不可用自動降級 | 高效能場景用 LanceDB，零依賴場景用 JSON |
+| Qdrant Edge 優先 + JSON Fallback | Qdrant 不可用自動降級 | 高效能場景用 Qdrant Edge，零依賴場景用 JSON |
 | BM25 混合檢索 | 純 Python 實現，零額外依賴 | 補充純關鍵詞搜索場景，無需向量模型 |
 | min_depth=3 | 館/架/書三層結構 | 確保記憶顆粒度，避免頂層過於籠統 |
 
