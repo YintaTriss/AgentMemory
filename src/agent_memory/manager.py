@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .l4_files import L4FilesStore, MemoryMeta, MemoryVec
-from .l3_lancedb import L3LanceDBStore, BM25Indexer
+from .bm25 import BM25Indexer
 from .l1_lcm import L1LCMCompressor
 from .sync import SyncManager
 from .library import LibraryClassifier
@@ -27,11 +27,9 @@ class MemoryManager:
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
                   For Qdrant:  "data/qdrant" (default)
-                  For LanceDB: "data/lancedb"
         embedder: Embedder instance for vectorization.
                   Defaults to HashEmbedder (offline, no API key needed).
-        l3_backend: Which L3 vector store to use.
-                     "qdrant" (Qdrant Edge, embedded, default) or "lancedb".
+        l3_backend: Which L3 vector store to use. Always "qdrant".
     """
 
     def __init__(self, base_dir: str = "memory", db_path: str = "data/qdrant",
@@ -42,12 +40,9 @@ class MemoryManager:
         self.l3_backend = l3_backend
         self.l4 = L4FilesStore(base_dir)
 
-        # Select L3 store based on backend
-        if l3_backend == "qdrant":
-            from .l3_qdrant import L3QdrantStore
-            self.l3 = L3QdrantStore(db_path=db_path)
-        else:
-            self.l3 = L3LanceDBStore(db_path)
+        # L3 store: always Qdrant Edge
+        from .l3_qdrant import L3QdrantStore
+        self.l3 = L3QdrantStore(db_path=db_path)
 
         self.l1 = L1LCMCompressor()
         self.sync = SyncManager(self.l4, self.l3, embedder, memory_dir=base_dir)
@@ -210,11 +205,22 @@ class MemoryManager:
 
         l4_stats = self.l4.get_stats()
         l3_count = self.l3.count()
-        embedder_name = "hash-v1"
-        dims = self.embedder.dim
+
+        # Detect actual embedder in use: check if FastEmbed was actually loaded
+        # _embedder is None when FastEmbed import failed or not installed
         if self.l3_backend == "qdrant":
-            embedder_name = f"fastembed-{getattr(self.l3, 'embedder_model', 'unknown')}"
-            dims = getattr(self.l3, 'vector_dim', dims)
+            actual_embedder = getattr(self.l3, '_embedder', None)
+            if actual_embedder is not None:
+                # FastEmbed was loaded and is in use
+                embedder_name = f"fastembed-{getattr(self.l3, 'embedder_model', 'unknown')}"
+                dims = getattr(self.l3, '_vector_dim', None) or getattr(self.l3, 'DEFAULT_DIM', 384)
+            else:
+                # FastEmbed not loaded — using HashEmbedder fallback
+                embedder_name = "hash-v1 (fallback)"
+                dims = self.embedder.dim
+        else:
+            embedder_name = "hash-v1"
+            dims = self.embedder.dim
 
         stats = {
             "total_memories": l4_stats["memory_count"],
@@ -274,6 +280,6 @@ def create_memory_manager(base_dir: str = "memory",
     Args:
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
-        l3_backend: "qdrant" (Qdrant Edge embedded, default) or "lancedb".
+        l3_backend: Always "qdrant" (Qdrant Edge embedded, default).
     """
     return MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)

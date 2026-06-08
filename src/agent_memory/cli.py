@@ -16,7 +16,7 @@ from typing import Optional
 from . import __version__
 from .l4_files import L4FilesStore
 from .library import LibraryClassifier, TOP_LEVEL_CATEGORIES
-from .l3_lancedb import L3LanceDBStore
+from .bm25 import BM25Indexer
 from .integrity import sign_file, verify_folder, sign_all_memories
 from .embedder import get_embedder
 
@@ -35,12 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--base-dir", default=DEFAULT_BASE_DIR, help="记忆存储目录")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式（机器可读）")
-    parser.add_argument(
-        "--l3-backend",
-        choices=["lancedb", "qdrant"],
-        default="qdrant",
-        help="L3 向量存储引擎: qdrant (Qdrant Edge 嵌入式，默认) 或 lancedb",
-    )
 
     subparsers = parser.add_subparsers(dest="command", title="commands", required=True)
 
@@ -138,7 +132,6 @@ def _print_result(data: dict, as_json: bool) -> None:
     if as_json:
         print(_format_json(data))
     else:
-        # 友好打印
         if "message" in data:
             print(data["message"])
         elif "content" in data:
@@ -148,14 +141,15 @@ def _print_result(data: dict, as_json: bool) -> None:
                 print(f"  {key}: {val}")
 
 
-def _get_l3_store(db_path: str, l3_backend: str):
-    """根据 l3_backend 返回对应的 L3 store 实例。"""
-    if l3_backend == "qdrant":
-        from .l3_qdrant import L3QdrantStore
-        return L3QdrantStore(db_path=db_path)
-    else:
-        from .l3_lancedb import L3LanceDBStore
-        return L3LanceDBStore(db_path=db_path)
+def _get_l3_store(db_path: str):
+    """返回 L3 store 实例（仅 Qdrant Edge）。"""
+    from .l3_qdrant import L3QdrantStore
+    return L3QdrantStore(db_path=db_path)
+
+
+def _qdrant_path(base_dir: str) -> str:
+    """返回 Qdrant data 目录路径。"""
+    return os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "qdrant")
 
 
 async def cmd_add(
@@ -166,23 +160,19 @@ async def cmd_add(
     source: str,
     base_dir: str,
     as_json: bool,
-    l3_backend: str = "lancedb",
 ) -> None:
     """处理 add 命令"""
     store = L4FilesStore(base_dir=base_dir)
     classifier = LibraryClassifier()
 
-    # 解析标签
     tag_list = []
     if tags:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-    # 确定分类
     category_path = category
     if not category_path:
         category_path = classifier.classify(content)
 
-    # 构建元数据
     metadata = {
         "importance": importance,
         "tags": tag_list,
@@ -190,7 +180,6 @@ async def cmd_add(
         "source": source,
     }
 
-    # 保存记忆
     import ulid
     memory_id = str(ulid.ULID())
     now = datetime.now().isoformat()
@@ -202,31 +191,33 @@ async def cmd_add(
     }
     mem_id = await store.save(memory_id, content, full_meta)
 
-    # 同步到 L3（向量存储）
-    import os as _os
-    _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
-    _db_path = _os.path.join(_os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
-    _l3 = _get_l3_store(_db_path, l3_backend)
-    # Use auto backend (returns HashEmbedder when no API key).
-    # embed_sync fallback handles async embedders.
+    # 同步到 L3（Qdrant Edge 向量存储）
+    _db_path = _qdrant_path(base_dir)
+    _l3 = _get_l3_store(_db_path)
     _embedder = get_embedder()
     _embed_fn = _embedder.embed_sync if hasattr(_embedder, "embed_sync") else _embedder.embed
     _vec = _embed_fn(content)
-    _l3.upsert(id=memory_id, content=content, vector=_vec, metadata=full_meta,
-               importance=full_meta.get("importance", 0.5),
-               category_path=full_meta.get("category_path", "general"),
-               created_at=full_meta.get("created_at"))
+    _l3.upsert(
+        id=memory_id, content=content, vector=_vec, metadata=full_meta,
+        importance=full_meta.get("importance", 0.5),
+        category_path=full_meta.get("category_path", "general"),
+        created_at=full_meta.get("created_at"),
+    )
 
     result = {
         "success": True,
         "id": mem_id,
         "category": category_path,
         "tags": tag_list,
-        "message": f"OK: Memory saved with ID: {mem_id}"
+        "message": f"OK: Memory saved with ID: {mem_id}",
     }
 
     if not as_json:
-        result["message"] = f"OK: Memory saved (ID: {mem_id})\n  Category: {category_path}\n  Tags: {', '.join(tag_list) if tag_list else '(none)'}"
+        result["message"] = (
+            f"OK: Memory saved (ID: {mem_id})\n"
+            f"  Category: {category_path}\n"
+            f"  Tags: {', '.join(tag_list) if tag_list else '(none)'}"
+        )
 
     _print_result(result, as_json)
 
@@ -238,21 +229,16 @@ async def cmd_search(
     mode: str,
     base_dir: str,
     as_json: bool,
-    l3_backend: str = "lancedb",
 ) -> None:
     """处理 search 命令 — 支持 vector / bm25 / hybrid 三种模式"""
-    import os
     from .embedder import get_embedder
-    from .l3_lancedb import L3LanceDBStore, BM25Indexer
 
     store = L4FilesStore(base_dir=base_dir)
     embedder = get_embedder()
-    _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
-    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
-    l3_store = _get_l3_store(db_path, l3_backend)
+    db_path = _qdrant_path(base_dir)
+    l3_store = _get_l3_store(db_path)
 
     if mode == "bm25":
-        # BM25: use pure Python BM25 (works with any L3 backend)
         all_records = l3_store.get_all()
         if not all_records:
             raw = []
@@ -281,7 +267,6 @@ async def cmd_search(
         ]
     elif mode == "hybrid":
         query_vector = embedder.embed(query)
-        # Hybrid: LanceDB has search_hybrid; Qdrant falls back to vector search
         if hasattr(l3_store, "search_hybrid"):
             raw = l3_store.search_hybrid(query_vector, query, top_k=limit)
         else:
@@ -300,10 +285,9 @@ async def cmd_search(
     else:
         # vector mode
         query_vector = embedder.embed(query)
-        # P2 fix: escape single quotes in category to prevent LanceDB injection
         filter_expr = None
         if category:
-            safe_cat = category.replace("'", "''")
+            safe_cat = category.replace("'", "\\'")
             filter_expr = f"category_path = '{safe_cat}'"
         raw = l3_store.search(query_vector, top_k=limit, filter_expr=filter_expr)
         results = [
@@ -342,13 +326,11 @@ async def cmd_list(
     category: Optional[str],
     limit: int,
     base_dir: str,
-    as_json: bool
+    as_json: bool,
 ) -> None:
     """处理 list 命令"""
     store = L4FilesStore(base_dir=base_dir)
 
-    # P0-2 fix: get_all_by_category() and get_meta() don't exist on L4FilesStore.
-    # Use list() + load_existing() instead.
     mem_ids = store.list()
     all_memories = []
     for mid in mem_ids:
@@ -356,11 +338,9 @@ async def cmd_list(
         if mem:
             all_memories.append({"id": mid, **mem})
 
-    # 过滤分类
     if category:
         all_memories = [m for m in all_memories if m.get("meta", {}).get("category_path") == category]
 
-    # 限制数量
     all_memories = all_memories[:limit]
     mem_ids = [m["id"] for m in all_memories]
 
@@ -396,13 +376,11 @@ async def cmd_list(
 async def cmd_show(
     mem_id: str,
     base_dir: str,
-    as_json: bool
+    as_json: bool,
 ) -> None:
     """处理 show 命令"""
     store = L4FilesStore(base_dir=base_dir)
 
-    # P0-2 fix: use load_existing() which returns dict with 'content' and 'meta',
-    # NOT get_meta() which doesn't exist
     mem = await store.load_existing(mem_id)
     if not mem:
         result = {"success": False, "message": f"Memory {mem_id} not found"}
@@ -423,14 +401,13 @@ async def cmd_show(
 async def cmd_delete(
     mem_id: str,
     base_dir: str,
-    db_path: str,
-    l3_backend: str,
     as_json: bool,
 ) -> None:
     """处理 delete 命令"""
-    from .manager import MemoryManager  # Lazy import to avoid circular deps
+    from .manager import MemoryManager
 
-    mm = MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)
+    db_path = _qdrant_path(base_dir)
+    mm = MemoryManager(base_dir=base_dir, db_path=db_path)
 
     success = await mm.delete(mem_id)
 
@@ -447,7 +424,7 @@ async def cmd_category(
     list_cats: bool,
     show_all: bool,
     base_dir: str,
-    as_json: bool
+    as_json: bool,
 ) -> None:
     """处理 category 命令"""
     store = L4FilesStore(base_dir=base_dir)
@@ -470,18 +447,20 @@ async def cmd_category(
             "count": len(categories),
         }
         if not as_json:
-            result["message"] = f"Used categories ({len(categories)}):\n  " + "\n  ".join(categories) if categories else "No categories used yet"
+            result["message"] = (
+                f"Used categories ({len(categories)}):\n  " + "\n  ".join(categories)
+                if categories else "No categories used yet"
+            )
         _print_result(result, as_json)
         return
 
-    # Default: show all
     result = {"success": True, "message": "Use --list or --show-all"}
     _print_result(result, as_json)
 
 
 async def cmd_stats(
     base_dir: str,
-    as_json: bool
+    as_json: bool,
 ) -> None:
     """处理 stats 命令"""
     store = L4FilesStore(base_dir=base_dir)
@@ -502,7 +481,7 @@ async def cmd_stats(
 
 
 def cmd_sign(dir_path: str, key: str, as_json: bool) -> None:
-    """P0-4: 处理 sign 命令 — 对目录中所有记忆文件进行 HMAC 签名"""
+    """处理 sign 命令"""
     root = Path(dir_path)
     if not root.is_dir():
         result = {"success": False, "message": f"Directory not found: {dir_path}"}
@@ -526,7 +505,7 @@ def cmd_sign(dir_path: str, key: str, as_json: bool) -> None:
 
 
 def cmd_verify(dir_path: str, key: str, as_json: bool) -> None:
-    """P0-4: 处理 verify 命令 — 验证目录中所有记忆文件的 HMAC 签名"""
+    """处理 verify 命令"""
     root = Path(dir_path)
     if not root.is_dir():
         result = {"success": False, "message": f"Directory not found: {dir_path}"}
@@ -556,13 +535,10 @@ async def cmd_reembed(
     as_json: bool,
 ) -> None:
     """处理 reembed 命令 — 重新向量化所有记忆"""
-    import os
     store = L4FilesStore(base_dir=base_dir)
     embedder = get_embedder(backend=embedder_type)
-
-    # L3 store 路径
-    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
-    l3_store = L3LanceDBStore(db_path=db_path)
+    db_path = _qdrant_path(base_dir)
+    l3_store = _get_l3_store(db_path)
 
     all_ids = store.list()
     if not all_ids:
@@ -574,8 +550,6 @@ async def cmd_reembed(
     errors = 0
     for mem_id in all_ids:
         try:
-            # P1-1 fix: use embed_sync if embedder is async (DashScopeEmbedder)
-            # P0-2 fix: load_existing() returns dict with content+meta; load() returns str
             _efn = embedder.embed_sync if hasattr(embedder, "embed_sync") else embedder.embed
             record = await store.load_existing(mem_id)
             if not record:
@@ -584,10 +558,7 @@ async def cmd_reembed(
             meta = record.get("meta", {})
             vec = _efn(content)
             l3_store.upsert(
-                id=mem_id,
-                content=content,
-                vector=vec,
-                metadata=meta,
+                id=mem_id, content=content, vector=vec, metadata=meta,
                 importance=meta.get("importance", 0.5),
                 category_path=meta.get("category_path", "general"),
                 created_at=meta.get("created_at"),
@@ -623,7 +594,7 @@ def cmd_serve(port: int, host: str, base_dir: str, as_json: bool) -> None:
         _print_result(result, as_json)
         return
 
-    db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", "lancedb")
+    db_path = _qdrant_path(base_dir)
     app = create_app(base_dir=base_dir, db_path=db_path)
 
     if as_json:
@@ -637,12 +608,10 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Build command arguments
     kwargs = vars(args).copy()
     command = kwargs.pop("command")
     as_json = kwargs.pop("json", False)
     base_dir = kwargs.pop("base_dir", DEFAULT_BASE_DIR)
-    l3_backend = kwargs.pop("l3_backend", "lancedb")
 
     if command == "sign":
         cmd_sign(kwargs["dir"], kwargs["key"], as_json)
@@ -660,7 +629,6 @@ def main() -> int:
         )) or 0
 
     if command == "mcp":
-        # 动态导入避免循环依赖
         from src.adapters.mcp_server import main as mcp_main
         mcp_main()
         return 0
@@ -689,7 +657,6 @@ def main() -> int:
             source=kwargs.get("source", "cli"),
             base_dir=base_dir,
             as_json=as_json,
-            l3_backend=l3_backend,
         )) or 0
 
     if command == "search":
@@ -700,7 +667,6 @@ def main() -> int:
             mode=kwargs.get("mode", "vector"),
             base_dir=base_dir,
             as_json=as_json,
-            l3_backend=l3_backend,
         )) or 0
 
     if command == "list":
@@ -719,13 +685,9 @@ def main() -> int:
         )) or 0
 
     if command == "delete":
-        _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
-        _db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
         return asyncio.run(cmd_delete(
             mem_id=kwargs["id"],
             base_dir=base_dir,
-            db_path=_db_path,
-            l3_backend=l3_backend,
             as_json=as_json,
         )) or 0
 

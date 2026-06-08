@@ -1,8 +1,8 @@
-# 记忆系统架构 v0.3 — 审查交接文档
+# AgentMemory 架构文档 v0.3.2
 
-> **版本：** v0.3（已确定）
-> **日期：** 2026-06-04
-> **状态：** 架构确定，待代码实现
+> **版本：** v0.3.2（实现版）
+> **日期：** 2026-06-08
+> **状态：** 与实现同步
 > **架构师：** 楚灵 ⚔️
 
 ---
@@ -15,139 +15,188 @@
 | **目标** | 为 AI Agent 提供持久化记忆存储，支持多 Agent 共享、热插拔、零外部依赖 |
 | **定位** | 通用记忆基础设施，可复用于各类 AI Agent 项目 |
 | **GitHub** | https://github.com/YintaTriss/AgentMemory |
+| **当前状态** | L3 向量搜索 + L4 文件双轨，BM25 关键词兜底，Web API 就绪 |
 
 ---
 
-## 二、核心架构：双轨 + 图书馆
+## 二、核心架构：双轨 + 图书馆 + BM25兜底
 
 ### 设计哲学
 
 > **记忆如图书馆。书籍本身不会变，但目录系统让查找变得精确。**
 
-同一份记忆同时存在于两条轨道，永远双轨并存，不存在"相变"切换。
-
 ```
-同一份记忆文件：
-├─ 图书馆分类轨（.md 本体 + meta.json 元数据）→ 精确查找，管理边界
-└─ Embedding 向量轨（vec.json）→ 语义搜索，模糊匹配
+同一份记忆：
+├─ L4 文件轨（.md 本体 + meta.json 元数据）→ 精确查找，人类可读
+├─ L3 向量轨（Qdrant Edge）→ 语义搜索
+└─ BM25 关键词索引→ 语义失败时的兜底检索
 ```
-
-### 架构演进
-
-| 版本 | 核心概念 | 结果 |
-|------|---------|------|
-| v0.1 | 四层架构（L1 LCM / L2 Graph-DB / L3 LanceDB / L4 Files） | ❌ L2 不存在，过度抽象 |
-| v0.2 | 三相架构（相变） | ❌ 不需要相变，VCP 验证 |
-| **v0.3** | **双轨 + 图书馆** | ✅ 确定 |
-
-### v0.3 核心设计
-
-**数据形态：**
-```
-记忆.md（人类可读本体）
-    ├─ vec.json（对应 Embedding 向量）
-    └─ meta.json（层级分类元数据）
-```
-
-**检索方式：**
-- 轨一：Embedding 向量检索（语义）
-- 轨二：图书馆分类检索（精确）
-
-**Embedding 支持：**
-- 本地 bge-large-zh 模型（免费）
-- API 模式（可切换）
-
-**热插拔：** 整个文件夹复制即迁移，无需安装
 
 ### 层级分类规范
 
 最多 4 层，示例：
 ```
-AI/LLM/Claude/上下文窗口
-AI/LLM/GPT/微调
+石榴籽/技术/NLLB/训练进度
 AI/Agent/记忆系统/VCP
 ```
 
 ---
 
-## 三、关键设计决策
+## 三、存储层级（ L1/L3/L4 三层）
+
+| 层级 | 组件 | 说明 |
+|------|------|------|
+| **L1** | `L1LCMCompressor` | 上下文压缩，FactType 实体提取，AI 上下文精简 |
+| **L3** | `L3QdrantStore` | Qdrant Edge 向量搜索（默认，嵌入式 Rust） |
+| **L3** | `BM25Indexer` | **Pure Python BM25**，零额外依赖，关键词兜底 |
+| **L4** | `L4FilesStore` | md + meta.json + vec.json 文件存储 |
+
+### L3 向量后端选择
+
+```
+create_memory_manager()  # 默认：Qdrant Edge + BM25 兜底
+```
+
+### 检索流程
+
+```
+search(query)
+  └→ L3 向量搜索（Qdrant COSINE）
+       ├→ scores > 0 → 返回向量相似度结果
+       └→ scores ≈ 0 → BM25 关键词重排序 → 返回关键词结果
+```
+
+**BM25 兜底逻辑**（`manager.py` `_bm25_rerank`）：
+- 当所有向量搜索 score = 0 时触发
+- Pure Python BM25Indexer（零额外依赖）
+- 同时支持 CLI `--mode bm25` / `--mode hybrid` 显式调用
+
+---
+
+## 四、Embedding 模型
+
+### 当前实际使用
+
+| Embedder | 维度 | 说明 |
+|----------|------|------|
+| **FastEmbed** `BAAI/bge-base-en-v1.5` | 768 | Qdrant 向量存储（需安装 `fastembed` 包） |
+| **HashEmbedder** | 384 | 零依赖纯 Hash 嵌入，用于文件向量存储 |
+
+### 依赖状态
+
+```bash
+# 推荐：安装 FastEmbed 以启用语义向量搜索
+pip install agentmemory[qdrant]  # 包含 fastembed
+
+# 零依赖模式：使用 HashEmbedder + BM25 关键词搜索
+pip install agentmemory          # 无额外依赖，仅 BM25 兜底
+```
+
+### ⚠️ 已知问题：维度不一致
+
+**问题描述：** `HashEmbedder` 产生 384 维向量，`FastEmbed` 产生 768 维向量（`bge-base-en-v1.5`）。如果混用两种 Embedder 会导致 Qdrant collection 维度不匹配。
+
+**当前行为：**
+- 安装 `fastembed` → 使用 `BAAI/bge-base-en-v1.5`（768维）→ 向量搜索正常
+- 未安装 `fastembed` → 回退到 `HashEmbedder`（384维）→ **Qdrant 存入零向量** → 搜索完全依赖 BM25
+
+**架构文档旧版本（v0.3）** 提及的 `bge-large-zh`（1024维）**未使用**，当前默认模型为 `BAAI/bge-base-en-v1.5`（768维）。
+
+---
+
+## 五、关键设计决策
 
 | 决策 | 说明 | 原因 |
 |------|------|------|
-| 去掉相变机制 | 文件+向量永远是双轨 | VCP 验证：不需要相变 |
-| 并发写入控制 | 文件锁/队列 | 多 Agent 并发写入场景 |
-| 记忆关联 | AI 自动推断 + 用户手动 | 平衡自动化和精确性 |
-| 零外部依赖 | 仅需文件夹 + 可选 bge-large-zh | 君子生非异也 |
+| Qdrant Edge primary | 默认 L3 后端 | 嵌入式 Rust 向量库，高性能语义搜索 |
+| BM25 fallback | 当向量搜索失败时触发 | Pure Python，零额外依赖，可靠的关键词检索 |
+| FastAPI Web 服务 | `src/agent_memory/web.py` | HTTP API 支持，可独立部署 |
+| CLI 三模式搜索 | `--mode vector\|bm25\|hybrid` | 向量 / 关键词 / 混合三种检索方式 |
 
 ---
 
-## 四、参考系统对比
+## 六、核心模块
 
-| 系统 | 数据形态 | 索引方式 | 多 Agent | NAS 支持 | 零依赖 |
-|------|---------|---------|---------|---------|-------|
-| Hermes | 文件（context.md）| 无向量 | 共享工作空间 | 原生 | ✅ |
-| VCP | 文件 + 向量双轨 | Tag + 向量 | 共用文件夹 | SQLite 单文件 | ✅ |
-| Mem0 | 向量 + 图关系 | 向量 + 关系图 | 多租户 | 需数据库 | ❌ |
-| Letta | Memory Blocks | 块索引 | Agent 内存 | 需服务 | ❌ |
-| **AgentMemory v0.3** | md + vec.json | 双轨检索 | 共用文件夹 | 原生 | ✅ |
-
----
-
-## 五、当前状态
-
-### ✅ 已完成（代码实现已落地）
-- 架构设计 v0.3（已确定）
-- VCP / SpectrAI / Hermes / Mem0 / Letta 深度分析
-- **代码实现**（`src/agent_memory/`）：
-  - ✅ `MemoryManager`：统一异步 API
-  - ✅ `L4FilesStore`：md + meta.json + vec.json 文件存储
-  - ✅ `L3LanceDBStore`：LanceDB 向量语义搜索
-  - ✅ `L1LCMCompressor`：上下文压缩（FactType 实体提取）
-  - ✅ `SyncManager`：L4 ↔ L3 双轨同步
-  - ✅ `LibraryClassifier`：4 层分类自动推断
-  - ✅ `Embedder`：HashEmbedder（零依赖）+ DashScopeEmbedder（可选）
-  - ✅ `IntegrityVerifier`：HMAC 签名验证
-  - ✅ 文件锁并发控制：`portalocker` + `msvcrt/fcntl` 回退（Windows/Unix 均支持）
-  - ✅ P0 安全修复（注入检测、trust_score 阈值、Unicode 规范化）
-  - ✅ 适配器生态：`openclaw` / `claude_code` / `crewai` / `langchain` / `openai_agents`
-
-### 依赖项
-- Python 3.10+
-- bge-large-zh（本地 Embedding，可选；默认 HashEmbedder 零依赖）
-- LanceDB（可选向量库；默认 HashEmbedder 纯文件模式）
+| 文件 | 类/函数 | 说明 |
+|------|---------|------|
+| `manager.py` | `MemoryManager` | 统一异步 API，BM25 兜底逻辑 |
+| `l3_qdrant.py` | `L3QdrantStore` | Qdrant Edge L3 向量存储 |
+| `bm25.py` | `BM25Indexer` | Pure Python BM25 关键词索引（零依赖） |
+| `l4_files.py` | `L4FilesStore` | md + meta.json + vec.json 文件存储 |
+| `library.py` | `LibraryClassifier` | 4 层分类自动推断 |
+| `embedder.py` | `Embedder`, `HashEmbedder`, `DashScopeEmbedder` | Embedder 抽象 + 零依赖 Hash 实现 |
+| `l1_lcm.py` | `L1LCMCompressor` | 上下文压缩，FactType 实体提取 |
+| `sync.py` | `SyncManager` | L4 ↔ L3 双轨同步 |
+| `web.py` | FastAPI app | HTTP API 服务 |
+| `cli.py` | CLI | 命令行工具，支持 vector/bm25/hybrid 搜索 |
+| `integrity.py` | `IntegrityVerifier` | HMAC 签名验证 |
 
 ---
 
-## 六、核心文件
+## 七、Web 服务（FastAPI）
 
-| 文件 | 说明 |
-|------|------|
-| `AgentMemory/ARCHITECTURE-v0.3.md` | 本文档 |
-| `AgentMemory/memory/` | 记忆存储目录（参考现有结构）|
-| `AgentMemory/src/` | 源代码目录 |
-| `AgentMemory/SKILL.md` | 技能定义 |
+启动方式：
+```bash
+cd AgentMemory
+python -m src.agent_memory.web
+# 默认：http://localhost:8080
+```
 
----
-
-## 七、给审查团队的建议
-
-**核心创新：**
-1. 双轨并存——不选择向量还是文件，两者天然互补
-2. 零外部依赖——文件夹即可迁移
-3. 热插拔——整个记忆库是一个文件夹，复制即分享
-
-**可能的挑战：**
-- Embedding 本地模型的性能和资源占用
-- 多 Agent 并发写入时的文件锁实现
-- 大规模记忆下的检索性能
-
-**建议审查重点：**
-1. 双轨设计是否合理？有没有遗漏的场景？
-2. 层级分类的深度限制（4 层）是否够用？
-3. 零依赖设计是否真的可行？
-4. 热插拔方案在实际多 Agent 场景下的表现
+主要端点：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查 |
+| GET | `/stats` | 记忆统计 |
+| POST | `/search` | 搜索（?q=&top_k=&mode=） |
+| POST | `/add` | 添加记忆 |
+| GET | `/list` | 列出记忆（?category=&limit=） |
+| GET | `/get/{id}` | 获取单条记忆 |
+| DELETE | `/delete/{id}` | 删除记忆 |
 
 ---
 
-_最后更新：2026-06-04_
+## 八、参考系统对比（更新）
+
+| 系统 | 数据形态 | 索引方式 | 多 Agent | NAS 支持 | 零依赖 | BM25 |
+|------|---------|---------|---------|---------|-------|------|
+| Hermes | 文件 | 无向量 | 共享工作空间 | 原生 | ✅ | ❌ |
+| VCP | 文件 + 向量双轨 | Tag + 向量 | 共用文件夹 | SQLite 单文件 | ✅ | ❌ |
+| Mem0 | 向量 + 图关系 | 向量 + 关系图 | 多租户 | 需数据库 | ❌ | ❌ |
+| **AgentMemory** | md + Qdrant + BM25 | 双轨 + BM25兜底 | 共用文件夹 | 原生 | ✅ | ✅ |
+
+---
+
+## 九、依赖项
+
+| 依赖 | 用途 | 性质 |
+|------|------|------|
+| Python | 运行时 | 必需 |
+| `qdrant-client` | Qdrant Edge 客户端 | L3 向量库（推荐） |
+| `fastembed` | 语义向量生成 | **可选**，安装后启用向量搜索 |
+| `portalocker` | 文件锁并发控制 | Windows 并发必需 |
+| `fastapi`, `uvicorn` | Web 服务 | 可选，Web 服务必需 |
+| **BM25Indexer** | 关键词检索 | **内置**，Pure Python，零依赖 |
+
+**零依赖安装：**
+```bash
+pip install agentmemory
+# 仅需 Python，无需安装任何向量库或模型
+# 搜索方式：HashEmbedder（384维）+ BM25 关键词兜底
+```
+
+---
+
+## 十、.gitignore 说明
+
+以下为运行时生成文件，**不应提交**：
+```
+memory/.lock_*           # 文件锁
+data/qdrant/             # Qdrant 向量数据库文件
+data/lancedb/            # LanceDB 数据目录
+data/lancedb_test*/      # 测试数据
+```
+
+---
+
+_最后更新：2026-06-08 v0.3.2_
 _架构师：楚灵 ⚔️_

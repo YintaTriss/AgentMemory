@@ -31,6 +31,16 @@ try:
 except ImportError:
     FASTEMBED_AVAILABLE = False
 
+# Known FastEmbed model dimensions (model_name -> vector_dim)
+# Used to pre-set _vector_dim before first upsert, avoiding dimension mismatches
+KNOWN_MODEL_DIMS = {
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-small-zh-v1.5": 512,
+    "BAAI/bge-base-en-v1.5": 768,
+    "BAAI/bge-base-en": 768,
+    "BAAI/bge-large-en-v1.5": 1024,
+}
+
 
 class L3QdrantStore:
     """L3 Vector Store using Qdrant Edge (embedded, no Docker).
@@ -45,25 +55,26 @@ class L3QdrantStore:
     Args:
         db_path: Directory for Qdrant storage (local folder).
         collection_name: Qdrant collection name.
-        embedder_model: FastEmbed model name (default: "BAAI/bge-base-en-v1.5").
-                       Smaller models: "thenlper/gte-small" (≈80MB)
-                       Larger models: "BAAI/bge-base-en-v1.5" (≈420MB)
-        vector_dim: Embedding dimension (default: 768 for bge-base-en-v1.5).
-                   gte-small uses 384.
+        embedder_model: FastEmbed model name.
+                       Chinese: "BAAI/bge-small-zh-v1.5" (90MB, 512维, 推荐中文)
+                       English: "BAAI/bge-small-en-v1.5" (67MB, 384维)
+                       English large: "BAAI/bge-base-en-v1.5" (220MB, 768维)
+        vector_dim: Embedding dimension (default: 512 for bge-small-zh-v1.5).
+                   bge-small-en-v1.5 uses 384.
         force_fallback: If True and Qdrant init fails, use in-memory JSON fallback.
     """
 
-    # Default vector dimension for FastEmbed BAAI/bge-base-en-v1.5
-    # Note: This is the FastEmbed model dimension. If using HashEmbedder (384-dim),
-    # pass vector_dim=384 explicitly.
-    DEFAULT_DIM = 768
+    # Default vector dimension for FastEmbed bge-small-zh-v1.5 (Chinese model).
+    # NOTE: The actual dimension is set by the first upserted vector.
+    # HashEmbedder uses 384; bge-small-zh-v1.5 uses 512; bge-base-en-v1.5 uses 768.
+    DEFAULT_DIM = 512
 
     def __init__(
         self,
         db_path: str = "data/qdrant",
         collection_name: str = "memories",
         *,
-        embedder_model: str = "BAAI/bge-base-en-v1.5",
+        embedder_model: str = "BAAI/bge-small-zh-v1.5",
         vector_dim: Optional[int] = None,
         force_fallback: bool = False,
     ):
@@ -101,6 +112,11 @@ class L3QdrantStore:
             if FASTEMBED_AVAILABLE:
                 try:
                     self._embedder = TextEmbedding(model_name=self.embedder_model)
+                    # Set _vector_dim based on known model dimensions to avoid
+                    # relying solely on auto-detection from first upsert
+                    self._vector_dim = self._vector_dim or KNOWN_MODEL_DIMS.get(
+                        self.embedder_model, self.DEFAULT_DIM
+                    )
                 except Exception:
                     self._embedder = None
             else:
