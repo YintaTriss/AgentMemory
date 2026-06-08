@@ -19,6 +19,7 @@ from .library import LibraryClassifier, TOP_LEVEL_CATEGORIES
 from .bm25 import BM25Indexer
 from .integrity import sign_file, verify_folder, sign_all_memories
 from .embedder import get_embedder
+from .observability import metrics
 
 
 # 默认工作目录（memory 存储位置）
@@ -45,6 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--tags", help="标签，逗号分隔")
     add_parser.add_argument("--category", help="分类路径，如 项目/石榴籽")
     add_parser.add_argument("--source", default="cli", help="来源")
+    add_parser.add_argument("--namespace", help="命名空间")
 
     # search 命令
     search_parser = subparsers.add_parser("search", help="搜索记忆")
@@ -57,19 +59,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="vector",
         help="搜索模式: vector=语义, bm25=关键词, hybrid=混合 (default: vector)",
     )
+    search_parser.add_argument("--namespace", help="命名空间")
 
     # list 命令
     list_parser = subparsers.add_parser("list", help="列出记忆")
     list_parser.add_argument("--category", help="限定分类路径")
     list_parser.add_argument("--limit", type=int, default=20, help="返回数量限制")
+    list_parser.add_argument("--namespace", help="命名空间")
 
     # show 命令
     show_parser = subparsers.add_parser("show", help="显示记忆详情")
     show_parser.add_argument("id", help="记忆 ID")
+    show_parser.add_argument("--namespace", help="命名空间")
 
     # delete 命令
     delete_parser = subparsers.add_parser("delete", help="删除记忆")
     delete_parser.add_argument("id", help="记忆 ID")
+    delete_parser.add_argument("--namespace", help="命名空间")
 
     # category 命令
     cat_parser = subparsers.add_parser("category", help="分类管理")
@@ -204,6 +210,8 @@ async def cmd_add(
         created_at=full_meta.get("created_at"),
     )
 
+    metrics.inc_add()
+
     result = {
         "success": True,
         "id": mem_id,
@@ -266,6 +274,8 @@ async def cmd_search(
             }
             for r in raw
         ]
+        metrics.inc_search("bm25")
+        metrics.inc_bm25_fallback()
     elif mode == "hybrid":
         # Proper hybrid: combine vector search + BM25 keyword search
         # Step 1: vector search
@@ -320,6 +330,7 @@ async def cmd_search(
             }
             for r in raw
         ]
+        metrics.inc_search("hybrid")
     else:
         # vector mode
         query_vector = embedder.embed(query)
@@ -337,6 +348,7 @@ async def cmd_search(
             }
             for r in raw
         ]
+        metrics.inc_search("vector")
 
     result = {
         "success": True,
@@ -448,6 +460,8 @@ async def cmd_delete(
     mm = MemoryManager(base_dir=base_dir, db_path=db_path)
 
     success = await mm.delete(mem_id)
+    if success:
+        metrics.inc_delete()
 
     result = {
         "success": success,
@@ -650,6 +664,12 @@ def main() -> int:
     command = kwargs.pop("command")
     as_json = kwargs.pop("json", False)
     base_dir = kwargs.pop("base_dir", DEFAULT_BASE_DIR)
+    namespace = kwargs.pop("namespace", None)
+    
+    # Apply namespace isolation: base_dir → base_dir/{namespace}/
+    if namespace:
+        ns_sanitized = namespace.replace("../", "").replace("..", "").strip("/")
+        base_dir = str(Path(base_dir) / ns_sanitized)
 
     if command == "sign":
         cmd_sign(kwargs["dir"], kwargs["key"], as_json)

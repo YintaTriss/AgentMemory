@@ -1,13 +1,18 @@
 """
-AgentMemory v0.3 - Memory Manager (Unified API)
+AgentMemory v2.0.2 - Memory Manager (Unified API)
 
 Main entry point for the memory system.
 Provides unified async API for all memory operations.
+
+Team Collaboration:
+- namespace: 隔离的命名空间，每个 agent/团队独立存储
+- TeamMemoryManager: 多 agent 团队共享记忆管理
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -18,23 +23,34 @@ from .l1_lcm import L1LCMCompressor
 from .sync import SyncManager
 from .library import LibraryClassifier
 from .embedder import Embedder, get_embedder
+from .observability import metrics
 
 
 class MemoryManager:
     """Unified Memory Manager with async API.
 
     Args:
+        namespace: 命名空间 ID，用于多 agent 隔离存储。
+                   设置后，base_dir → base_dir/{namespace}/，db_path → db_path/{namespace}/
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
                   For Qdrant:  "data/qdrant" (default)
         embedder: Embedder instance for vectorization.
-                  Defaults to HashEmbedder (offline, no API key needed).
+                  Defaults to the same embedder as L3 Qdrant store.
         l3_backend: Which L3 vector store to use. Always "qdrant".
     """
 
     def __init__(self, base_dir: str = "memory", db_path: str = "data/qdrant",
                  embedder: Optional[Embedder] = None,
-                 l3_backend: str = "qdrant"):
+                 l3_backend: str = "qdrant",
+                 namespace: Optional[str] = None):
+        # Namespace isolation: append namespace to paths
+        if namespace:
+            ns_sanitized = namespace.replace("../", "").replace("..", "").strip("/")
+            base_dir = str(Path(base_dir) / ns_sanitized)
+            db_path = str(Path(db_path) / ns_sanitized)
+        
+        self.namespace = namespace
         self.base_dir = base_dir
         self.db_path = db_path
         self.l3_backend = l3_backend
@@ -56,6 +72,9 @@ class MemoryManager:
     async def add(self, content: str, importance: float = 0.5,
                   category_path: Optional[str] = None, tags: Optional[List[str]] = None,
                   source: str = "manual") -> str:
+        import time
+        t0 = time.perf_counter()
+
         if category_path is None:
             category_path = self.classifier.classify(content)
         memory_id = self._generate_id(content)
@@ -79,10 +98,16 @@ class MemoryManager:
         await self.sync.sync_one(memory_id)
 
         self._invalidate_cache()
+        metrics.inc_add()
+        metrics.record_add_latency(time.perf_counter() - t0)
         return memory_id
 
     async def search(self, query: str, limit: int = 5,
                     category_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        import time
+        t0 = time.perf_counter()
+        mode = "vector"
+
         # Handle async embedder (DashScopeEmbedder)
         import asyncio
         if asyncio.iscoroutinefunction(self.embedder.embed):
@@ -104,6 +129,8 @@ class MemoryManager:
             and all(r.get("score", None) is None or r.get("score", 0) == 0 for r in results)
         )
         if needs_bm25:
+            mode = "bm25"
+            metrics.inc_bm25_fallback()
             results = self._bm25_rerank(query, results, top_k=limit)
 
         enriched = []
@@ -122,6 +149,10 @@ class MemoryManager:
                     "created_at": meta.get("created_at", r.get("created_at", "")),
                     "metadata": r.get("metadata", {}),
                 })
+                metrics.record_search_score(r.get("score", 0))
+
+        metrics.inc_search(mode)
+        metrics.record_search_latency(time.perf_counter() - t0, mode)
         return enriched
 
     async def list(self, category_path: Optional[str] = None,
@@ -180,6 +211,7 @@ class MemoryManager:
         # (L3 vector becomes orphaned but cannot be retrieved since L4 content is gone)
         if deleted:
             self._invalidate_cache()
+            metrics.inc_delete()
         return deleted
 
     async def compress_for_context(self, memory_ids: List[str],
@@ -276,12 +308,142 @@ class MemoryManager:
 
 def create_memory_manager(base_dir: str = "memory",
                           db_path: str = "data/qdrant",
-                          l3_backend: str = "qdrant") -> MemoryManager:
+                          l3_backend: str = "qdrant",
+                          namespace: Optional[str] = None) -> MemoryManager:
     """Create a MemoryManager instance.
 
     Args:
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
         l3_backend: Always "qdrant" (Qdrant Edge embedded, default).
+        namespace: 命名空间，用于多 agent 隔离存储。
     """
-    return MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)
+    return MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend, namespace=namespace)
+
+
+class TeamMemoryManager:
+    """
+    团队协作记忆管理器。
+    
+    支持多 agent 共享同一个团队的记忆，同时保持各自独立的空间。
+    
+    存储结构:
+        memory/
+            {team}/              ← 团队共享记忆
+                _shared/         ← 团队成员共享的记忆
+                {agent1}/        ← agent1 私有记忆
+                {agent2}/        ← agent2 私有记忆
+            data/
+                qdrant/
+                    {team}/
+                        _shared/
+                        {agent1}/
+                        {agent2}/
+
+    Args:
+        team: 团队 ID
+        base_dir: 根存储目录
+        db_path: 向量库根目录
+        embedder: Embedder 实例
+    """
+
+    def __init__(self, team: str,
+                 base_dir: str = "memory",
+                 db_path: str = "data/qdrant",
+                 embedder: Optional[Embedder] = None):
+        self.team = team
+        self.base_dir = base_dir
+        self.db_path = db_path
+        self._embedder = embedder
+        
+        # Shared memory manager for the team
+        self.shared = MemoryManager(
+            base_dir=str(Path(base_dir) / team / "_shared"),
+            db_path=str(Path(db_path) / team / "_shared"),
+            embedder=embedder,
+            namespace=None,
+        )
+        # Track registered agents
+        self._agents: Dict[str, MemoryManager] = {}
+
+    def register_agent(self, agent_id: str) -> MemoryManager:
+        """
+        注册一个 agent，获得其私有的记忆空间。
+        
+        Args:
+            agent_id: Agent 唯一标识
+        Returns:
+            该 agent 的 MemoryManager 实例
+        """
+        if agent_id not in self._agents:
+            self._agents[agent_id] = MemoryManager(
+                base_dir=str(Path(self.base_dir) / self.team / agent_id),
+                db_path=str(Path(self.db_path) / self.team / agent_id),
+                embedder=self._embedder,
+                namespace=None,
+            )
+        return self._agents[agent_id]
+
+    def get_agent(self, agent_id: str) -> Optional[MemoryManager]:
+        """获取已注册的 agent MemoryManager，未注册返回 None"""
+        return self._agents.get(agent_id)
+
+    def list_agents(self) -> List[str]:
+        """列出所有已注册的 agent ID"""
+        return list(self._agents.keys())
+
+    async def share_to_team(self, agent_id: str, memory_id: str) -> bool:
+        """
+        将某 agent 的记忆共享到团队空间。
+        
+        Args:
+            agent_id: 来源 agent
+            memory_id: 要共享的记忆 ID
+        Returns:
+            是否共享成功
+        """
+        agent_mem = self._agents.get(agent_id)
+        if not agent_mem:
+            return False
+        mem = await agent_mem.get(memory_id)
+        if not mem:
+            return False
+        # Write to team shared space
+        shared_id = await self.shared.add(
+            content=mem["content"],
+            importance=mem.get("importance", 0.5),
+            category_path=f"team:{self.team}/shared",
+            tags=["shared", f"from:{agent_id}"],
+            source=f"agent:{agent_id}",
+        )
+        return True
+
+    async def get_shared(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """获取团队共享的所有记忆"""
+        return await self.shared.list(limit=limit)
+
+    async def stats_all(self) -> Dict[str, Any]:
+        """获取团队所有 agent 的统计"""
+        stats = {
+            "team": self.team,
+            "shared": await self.shared.stats(),
+            "agents": {},
+        }
+        for agent_id, mgr in self._agents.items():
+            stats["agents"][agent_id] = await mgr.stats()
+        return stats
+
+
+def create_team_memory_manager(team: str,
+                               base_dir: str = "memory",
+                               db_path: str = "data/qdrant",
+                               embedder: Optional[Embedder] = None) -> TeamMemoryManager:
+    """Create a TeamMemoryManager instance.
+
+    Args:
+        team: 团队 ID
+        base_dir: 根存储目录
+        db_path: 向量库根目录
+        embedder: Embedder 实例
+    """
+    return TeamMemoryManager(team=team, base_dir=base_dir, db_path=db_path, embedder=embedder)

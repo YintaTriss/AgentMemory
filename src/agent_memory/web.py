@@ -90,6 +90,16 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
     async def health():
         return {"status": "ok", "version": __version__}
 
+    @app.get("/healthz")
+    async def healthz():
+        from agent_memory.observability import healthz as do_health_check
+        return await do_health_check()
+
+    @app.get("/metrics")
+    async def metrics():
+        from agent_memory.observability import metrics as get_metrics
+        return get_metrics.get_stats()
+
     # ---- Memory CRUD ----
 
     @app.post("/memories")

@@ -1,5 +1,5 @@
 """
-AgentMemory v0.3 - 双轨 + 图书馆记忆系统
+AgentMemory v2.0.2 - 三层双轨 + 图书馆记忆系统
 
 Simplified 3-layer architecture:
 - L4: File System (md + meta.json)
@@ -10,8 +10,13 @@ Design Philosophy: Memory as Library
 - Track 1: Library Classification (exact retrieval)
 - Track 2: Embedding Vector (semantic search)
 
+Team Collaboration:
+- namespace: 命名空间隔离，不同 agent 独立存储
+- TeamMemoryManager: 多 agent 团队共享记忆管理
+
 Components:
 - MemoryManager: Unified async API
+- TeamMemoryManager: Multi-agent team memory sharing
 - L4FilesStore: File system storage
 - L3QdrantStore: Qdrant Edge vector search (Rust内核，高性能)
 - L1LCMCompressor: Context compression
@@ -30,7 +35,7 @@ __author__ = "楚灵"
 __license__ = "MIT"
 
 # Main classes
-from .manager import MemoryManager, create_memory_manager
+from .manager import MemoryManager, create_memory_manager, TeamMemoryManager, create_team_memory_manager
 from .l4_files import L4FilesStore, MemoryMeta, MemoryVec
 try:
     from .l3_qdrant import L3QdrantStore
@@ -50,6 +55,8 @@ __all__ = [
     # Main API
     "MemoryManager",
     "create_memory_manager",
+    "TeamMemoryManager",
+    "create_team_memory_manager",
     # Storage layers
     "L4FilesStore",
     "L3QdrantStore",
