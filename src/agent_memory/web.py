@@ -240,40 +240,36 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
             raw = l3_store.search(query_vector, top_k=top_k, filter_expr=filter_expr)
             return {"mode": "vector", "query": q, "results": raw}
 
-        # hybrid
+        # hybrid: RRF (Reciprocal Rank Fusion) - unified with CLI
         vec_results = l3_store.search(query_vector, top_k=top_k * 2, filter_expr=filter_expr)
         bm25_results = l3_store.search_bm25(q, top_k=top_k * 2)
 
-        # Inline hybrid fusion
-        max_vec = max((r.get("score", 0) for r in vec_results), default=1.0)
-        max_bm = max((r.get("bm25_score", 0) for r in bm25_results), default=1.0)
-        alpha = 0.7
-        vec_map = {r["id"]: r.get("score", 0) / max_vec for r in vec_results}
-        bm_map = {r["id"]: r.get("bm25_score", 0) / max_bm for r in bm25_results}
-        all_ids = set(vec_map) | set(bm_map)
-        scores = []
+        RRF_K = 60
+        vec_rank = {r["id"]: rank for rank, r in enumerate(vec_results)}
+        bm_rank = {r["id"]: rank for rank, r in enumerate(bm25_results)}
+        all_ids = set(vec_rank.keys()) | set(bm_rank.keys())
+        rrf_scores = {}
         for mid in all_ids:
-            vs = vec_map.get(mid, 0.0)
-            bs = bm_map.get(mid, 0.0)
-            scores.append((mid, alpha * vs + (1 - alpha) * bs))
-        scores.sort(key=lambda x: x[1], reverse=True)
-
+            vr = vec_rank.get(mid, 9999)
+            br = bm_rank.get(mid, 9999)
+            rrf_scores[mid] = (1.0 / (RRF_K + vr) if vr < 9999 else 0.0) + (1.0 / (RRF_K + br) if br < 9999 else 0.0)
+        sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
         id_to_v = {r["id"]: r for r in vec_results}
         id_to_b = {r["id"]: r for r in bm25_results}
         results = []
-        for mid, score in scores[:top_k]:
+        for mid in sorted_ids[:top_k]:
             vr = id_to_v.get(mid, {})
             br = id_to_b.get(mid, {})
             results.append({
                 "id": mid,
                 "content": vr.get("content") or br.get("content", ""),
-                "score": round(score, 6),
+                "score": round(rrf_scores[mid], 6),
                 "vector_score": vr.get("score", 0.0),
                 "bm25_score": br.get("bm25_score", 0.0),
                 "metadata": vr.get("metadata") or {},
                 "category_path": vr.get("category_path") or br.get("category_path", ""),
             })
-        return {"mode": "hybrid", "query": q, "alpha": alpha, "results": results}
+        return {"mode": "hybrid", "query": q, "rrf_k": RRF_K, "results": results}
 
     # ---- Stats ----
 

@@ -278,59 +278,50 @@ async def cmd_search(
         metrics.inc_search("bm25")
         metrics.inc_bm25_fallback()
     elif mode == "hybrid":
-        # Proper hybrid: combine vector search + BM25 keyword search
-        # Step 1: vector search
+        # Proper hybrid: RRF (Reciprocal Rank Fusion) - industry standard
+        # RRF = 1/(k+rank_vector) + 1/(k+rank_bm25), k=60
+        RRF_K = 60
         query_vector = embedder.embed(query)
         vector_results = l3_store.search(query_vector, top_k=limit * 2)
-
-        # Step 2: BM25 search
         all_records = l3_store.get_all()
+        bm_id_scores = {}
         if all_records:
             texts = [r.get("content", "") or "" for r in all_records]
             bm25_indexer = BM25Indexer(k1=1.2, b=0.75)
             bm25_indexer.index(texts)
             bm_raw = bm25_indexer.search(query, top_k=limit * 2)
-            # Build id->bm25_score map from all_records
-            bm_id_scores = {}
-            for bm in bm_raw:
+            for rank, bm in enumerate(bm_raw):
                 rec = all_records[bm["doc_index"]]
                 bm_id_scores[rec["id"]] = bm["bm25_score"]
-        else:
-            bm_id_scores = {}
 
-        # Step 3: Combine scores (normalized vector + normalized BM25)
-        vec_scores = {r["id"]: r.get("score", 0) for r in vector_results}
-        all_ids = list(vec_scores.keys())
-        max_vec = max(vec_scores.values()) if vec_scores else 1.0
-        max_bm = max(bm_id_scores.values()) if bm_id_scores else 1.0
-
-        combined = []
+        # Build RRF scores using rank position (not raw scores)
+        vec_rank = {r["id"]: rank for rank, r in enumerate(vector_results)}
+        bm_rank = {mid: rank for rank, bm in enumerate(bm_raw) for mid in [all_records[bm["doc_index"]]["id"]]}
+        all_ids = set(vec_rank.keys()) | set(bm_rank.keys())
+        rrf_scores = {}
         for id_ in all_ids:
-            vec_s = vec_scores[id_] / max_vec if max_vec > 0 else 0
-            bm_s = bm_id_scores.get(id_, 0) / max_bm if max_bm > 0 else 0
-            rec = next((r for r in vector_results if r["id"] == id_), {})
-            combined.append({
-                "id": id_,
-                "content": rec.get("content", ""),
-                "score": vec_s + bm_s,
-                "vector_score": vec_scores[id_],
-                "bm25_score": bm_id_scores.get(id_, 0),
-                "category_path": rec.get("category_path", ""),
-            })
+            vr = vec_rank.get(id_, 9999)
+            br = bm_rank.get(id_, 9999)
+            vec_s = 1.0 / (RRF_K + vr) if vr < 9999 else 0.0
+            bm_s = 1.0 / (RRF_K + br) if br < 9999 else 0.0
+            rrf_scores[id_] = vec_s + bm_s
 
-        combined.sort(key=lambda x: x["score"], reverse=True)
-        raw = combined[:limit]
-        results = [
-            {
-                "id": r["id"],
-                "content": (r["content"][:100] + "...") if len(r["content"] or "") > 100 else r.get("content", ""),
-                "score": r["score"],
-                "vector_score": r.get("vector_score", 0),
-                "bm25_score": r.get("bm25_score", 0),
-                "category_path": r.get("category_path", ""),
-            }
-            for r in raw
-        ]
+        sorted_ids = sorted(rrf_scores, key=rrf_scores.__getitem__, reverse=True)
+        id_to_vec = {r["id"]: r for r in vector_results}
+        id_to_bm_rec = {all_records[bm["doc_index"]]["id"]: all_records[bm["doc_index"]] for bm in bm_raw}
+        results = []
+        for id_ in sorted_ids[:limit]:
+            vr = id_to_vec.get(id_, {})
+            br = id_to_bm_rec.get(id_, {})
+            content = vr.get("content") or br.get("content", "")
+            results.append({
+                "id": id_,
+                "content": (content[:100] + "...") if len(content or "") > 100 else content,
+                "score": round(rrf_scores[id_], 6),
+                "vector_score": vr.get("score", 0.0),
+                "bm25_score": bm_id_scores.get(id_, 0.0),
+                "category_path": vr.get("category_path") or br.get("category_path", ""),
+            })
         metrics.inc_search("hybrid")
     else:
         # vector mode
