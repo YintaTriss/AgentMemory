@@ -34,9 +34,9 @@ class MemoryManager:
                      "lancedb" (default) or "qdrant" (Qdrant Edge, embedded).
     """
 
-    def __init__(self, base_dir: str = "memory", db_path: str = "data/lancedb",
+    def __init__(self, base_dir: str = "memory", db_path: str = "data/qdrant",
                  embedder: Optional[Embedder] = None,
-                 l3_backend: str = "lancedb"):
+                 l3_backend: str = "qdrant"):
         self.base_dir = base_dir
         self.db_path = db_path
         self.l3_backend = l3_backend
@@ -265,13 +265,13 @@ class MemoryManager:
 
 
 def create_memory_manager(base_dir: str = "memory",
-                          db_path: str = "data/lancedb",
-                          l3_backend: str = "lancedb") -> MemoryManager:
+                          db_path: str = "data/qdrant",
+                          l3_backend: str = "qdrant") -> MemoryManager:
     """Create a MemoryManager instance.
 
     Args:
         base_dir: L4 file storage directory.
         db_path: L3 vector store directory.
-        l3_backend: "lancedb" (default) or "qdrant" (Qdrant Edge embedded).
+        l3_backend: "qdrant" (Qdrant Edge embedded, default) or "lancedb".
     """
     return MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)

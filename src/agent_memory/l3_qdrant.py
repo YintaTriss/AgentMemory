@@ -21,10 +21,15 @@ import numpy as np
 try:
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, PointStruct
-    from fastembed import TextEmbedding
     QDRANT_AVAILABLE = True
 except ImportError:
     QDRANT_AVAILABLE = False
+
+try:
+    from fastembed import TextEmbedding
+    FASTEMBED_AVAILABLE = True
+except ImportError:
+    FASTEMBED_AVAILABLE = False
 
 
 class L3QdrantStore:
@@ -95,12 +100,16 @@ class L3QdrantStore:
             # It requires downloading model files (internet access).
             # If it fails, we fall back gracefully; the manager's embedder
             # will provide vectors for storage.
-            try:
-                self._embedder = TextEmbedding(model_name=self.embedder_model)
-                print(f"[L3] FastEmbed loaded: {self.embedder_model}")
-            except Exception as e:
-                print(f"[L3] FastEmbed init failed: {e} — using fallback embedder")
+            if FASTEMBED_AVAILABLE:
+                try:
+                    self._embedder = TextEmbedding(model_name=self.embedder_model)
+                    print(f"[L3] FastEmbed loaded: {self.embedder_model}")
+                except Exception as e:
+                    print(f"[L3] FastEmbed init failed: {e} — using fallback embedder")
+                    self._embedder = None
+            else:
                 self._embedder = None
+                print(f"[L3] FastEmbed not available — using fallback embedder")
 
         except Exception as e:
             print(f"[L3] Qdrant init failed: {e}, falling back to JSON")
@@ -272,6 +281,7 @@ class L3QdrantStore:
                         payload=payload,
                     )
                 ],
+                wait=True,  # Ensure data is flushed to disk in local mode
             )
             return True
 
@@ -415,6 +425,7 @@ class L3QdrantStore:
             self._client.delete(
                 collection_name=self.collection_name,
                 points_selector=[point_id],
+                wait=True,  # Ensure deletion is processed before returning
             )
             return True
         except Exception as e:

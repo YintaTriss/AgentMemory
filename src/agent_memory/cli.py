@@ -38,8 +38,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--l3-backend",
         choices=["lancedb", "qdrant"],
-        default="lancedb",
-        help="L3 向量存储引擎: lancedb (默认) 或 qdrant (Qdrant Edge 嵌入式)",
+        default="qdrant",
+        help="L3 向量存储引擎: qdrant (Qdrant Edge 嵌入式，默认) 或 lancedb",
     )
 
     subparsers = parser.add_subparsers(dest="command", title="commands", required=True)
@@ -423,12 +423,16 @@ async def cmd_show(
 async def cmd_delete(
     mem_id: str,
     base_dir: str,
-    as_json: bool
+    db_path: str,
+    l3_backend: str,
+    as_json: bool,
 ) -> None:
     """处理 delete 命令"""
-    store = L4FilesStore(base_dir=base_dir)
+    from .manager import MemoryManager  # Lazy import to avoid circular deps
 
-    success = await store.delete(mem_id)
+    mm = MemoryManager(base_dir=base_dir, db_path=db_path, l3_backend=l3_backend)
+
+    success = await mm.delete(mem_id)
 
     result = {
         "success": success,
@@ -715,9 +719,13 @@ def main() -> int:
         )) or 0
 
     if command == "delete":
+        _l3_dir = "qdrant" if l3_backend == "qdrant" else "lancedb"
+        _db_path = os.path.join(os.path.dirname(base_dir.rstrip("/\\")), "data", _l3_dir)
         return asyncio.run(cmd_delete(
             mem_id=kwargs["id"],
             base_dir=base_dir,
+            db_path=_db_path,
+            l3_backend=l3_backend,
             as_json=as_json,
         )) or 0
 
