@@ -37,6 +37,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
+    "watchdog>=3.0.0",  # test_audit_coverage, test_dream_*, test_engineering_ports need it
 ]
 embed = [
     "sentence-transformers>=2.2.0",
