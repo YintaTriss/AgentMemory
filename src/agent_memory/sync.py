@@ -65,6 +65,22 @@ class SyncManager:
             # P1-1 fix: use _embed_fn which handles sync/async embedder correctly
             vector = self._embed_fn(content)
 
+            # BUG-4 (P1) fix: validate embedder output before passing to L3.
+            # Embedder may return None or non-list on empty/whitespace content,
+            # which would corrupt LanceDB / Qdrant vector store.
+            if not vector or not isinstance(vector, list) or not all(
+                isinstance(x, (int, float)) for x in vector
+            ):
+                if isinstance(vector, list):
+                    vector_repr = f"list[{len(vector)}]"
+                else:
+                    vector_repr = repr(vector)
+                print(
+                    f"[Sync] Embedding failed for {memory_id}: "
+                    f"got {type(vector).__name__} ({vector_repr})"
+                )
+                return False
+
             # meta is already a dict from load_existing (P0-1 fix)
             source = meta.get("source", "manual")
             tags = meta.get("tags", [])
