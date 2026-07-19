@@ -29,6 +29,7 @@ dependencies = [
     "pydantic>=2.7",
     "jieba>=0.42",  # 中文分词 (BM25 + Reranker)
     "numpy>=1.26",  # 梦境信号分解依赖
+    "rapidfuzz>=3.0.0",  # fuzzy_search.py core dependency (NOT optional)
 ]
 
 [project.optional-dependencies]
