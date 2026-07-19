@@ -1,0 +1,78 @@
+name: Tests
+
+# AgentMemory CI
+# 触发条件：push / PR 到 main，cron 每周一凌晨跑全量回归
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # 每周一 UTC 02:00 跑全量回归（防依赖漂移）
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+# 取消正在跑的旧 CI，避免资源浪费
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Show Python info
+        shell: bash
+        run: |
+          python --version
+          pip --version
+
+      - name: Install core dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # 核心 + 开发依赖（不需要 qdrant / fastembed / web）
+          pip install -e ".[dev]"
+
+      - name: Run unit + benchmark tests
+        shell: bash
+        # 跳过 integration（需要真实 NewAPI/LocalEmbed 服务，CI 无）
+        # 跳过 security/performance（security 需要密码学 bench 工具，perf 跑得太慢）
+        run: |
+          pytest tests/ \
+            -q \
+            --ignore=tests/integration \
+            --ignore=tests/security \
+            --ignore=tests/performance \
+            -m "not slow" \
+            --tb=short \
+            --maxfail=10
+
+      - name: Run benchmarks
+        shell: bash
+        if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
+        # benchmark 只在主版本（py3.12 + linux）跑一次，节省 CI 资源
+        run: |
+          pytest tests/benchmarks/ -q --tb=short
+
+      - name: Run doctor command (smoke)
+        shell: bash
+        run: |
+          python -m src.cli doctor --json | python -c "import sys, json; d=json.load(sys.stdin); assert d['success']; print('doctor OK')"

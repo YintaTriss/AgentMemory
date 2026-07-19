@@ -65,6 +65,15 @@ class MemoryMeta:
     source: str = "manual"
     access_count: int = 0
     last_accessed: str = field(default_factory=lambda: datetime.now().isoformat())
+    # 2026-07-15 方向 1: 时间有效性字段
+    # - valid_from: 这条事实从何时起有效 (默认 created_at)
+    # - valid_until: 这条事实到何时为止有效 (None = 仍有效)
+    # - invalidated_by: 让本事实失效的新事实 ID (None = 未被失效)
+    # - supersedes: 本事实取代的旧事实 ID 列表 (反向链)
+    valid_from: Optional[str] = None  # None = 默认用 created_at
+    valid_until: Optional[str] = None
+    invalidated_by: Optional[str] = None
+    supersedes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -78,6 +87,10 @@ class MemoryMeta:
             "source": self.source,
             "access_count": self.access_count,
             "last_accessed": self.last_accessed,
+            "valid_from": self.valid_from,
+            "valid_until": self.valid_until,
+            "invalidated_by": self.invalidated_by,
+            "supersedes": self.supersedes,
         }
 
     @classmethod
@@ -93,7 +106,31 @@ class MemoryMeta:
             source=data.get("source", "manual"),
             access_count=data.get("access_count", 0),
             last_accessed=data.get("last_accessed", datetime.now().isoformat()),
+            valid_from=data.get("valid_from"),
+            valid_until=data.get("valid_until"),
+            invalidated_by=data.get("invalidated_by"),
+            supersedes=data.get("supersedes", []) or [],
         )
+
+    def is_valid_at(self, at_time: Optional[str] = None) -> bool:
+        """在指定时间(或现在)是否有效
+
+        Args:
+            at_time: ISO datetime string,None = 现在
+        Returns:
+            True = 有效,False = 已被 invalidate 或尚未到达 valid_from
+        """
+        from datetime import datetime as _dt
+        if at_time is None:
+            at_time = _dt.now().isoformat()
+        if self.invalidated_by is not None:
+            return False
+        valid_from = self.valid_from or self.created_at
+        if valid_from and at_time < valid_from:
+            return False
+        if self.valid_until and at_time >= self.valid_until:
+            return False
+        return True
 
 
 @dataclass
@@ -370,7 +407,7 @@ class L4FilesStore:
         if meta is None:
             meta = {}
         
-        return {"content": content, "meta": meta}
+        return {"id": memory_id, "content": content, "meta": meta}
 
     async def delete(self, memory_id: str) -> bool:
         """
@@ -397,12 +434,70 @@ class L4FilesStore:
         memory_ids = []
         if not self.base_dir.exists():
             return memory_ids
-        
+
         for f in self.base_dir.iterdir():
             if f.suffix == ".md":
                 memory_ids.append(f.stem)
-        
+
         return memory_ids
+
+    async def list_active(self, limit: int = 100,
+                          category_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出当前有效的记忆(未被 invalidated 的)
+
+        2026-07-15 方向 1: 给 contradiction detector 用,
+        只返回未失效的记忆,避免反复检测已失效的旧事实。
+
+        Args:
+            limit: 最多返回多少条
+            category_path: 可选,按类别过滤
+
+        Returns:
+            memory dict 列表(content + meta)
+        """
+        active = []
+        for mid in self.list():
+            if len(active) >= limit:
+                break
+            mem = await self.load_existing(mid)
+            if not mem:
+                continue
+            meta = mem.get("meta", {}) or {}
+            # 跳过已 invalidated
+            if meta.get("invalidated_by"):
+                continue
+            # 按 category_path 过滤
+            if category_path:
+                cp = meta.get("category_path") or meta.get("category")
+                if cp and cp != category_path:
+                    continue
+            active.append(mem)
+        return active
+
+    async def update_meta(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
+        """更新记忆的 meta(不修改 content)
+
+        2026-07-15 方向 1: contradiction detector 用来标记旧事实的 invalidated_by。
+        Returns:
+            True = 成功,False = 失败或文件不存在
+        """
+        paths = self._get_file_paths(memory_id)
+        meta_path = paths["meta"]
+        with _file_lock(self._get_lock_path(memory_id)):
+            if not meta_path.exists():
+                return False
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    current = json.load(f)
+                if not isinstance(current, dict):
+                    current = {}
+                # Merge: 保留未提供的字段,覆盖提供的字段
+                current.update(metadata)
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(current, f, ensure_ascii=False, indent=2)
+                return True
+            except Exception:
+                return False
 
     def get_stats(self) -> Dict[str, Any]:
         memory_ids = self.list()

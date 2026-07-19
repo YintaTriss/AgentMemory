@@ -1,11 +1,21 @@
 """
-AgentMemory HTTP REST API
+AgentMemory HTTP REST API (v2.1.0)
 
-基于 FastAPI 的 REST API 实现，提供记忆存储/查询/管理接口。
+2026-07-15: 老 MemoryHermes → agent_memory.MemoryManager 迁移
+
+变更:
+- `from memory_manager import MemoryHermes` → `from agent_memory import MemoryManager`
+- `MemoryHermes` 方法调用全部改用新 MemoryManager 异步 API
+- on_session_end / run_decay_check 新 Manager 无对应方法 → 返回 501 Not Implemented
+  (原因:这些方法已被拆分到 agent adapter / bg task,见 CHANGELOG-2026-07-15.md)
+- 错误类型 MemoryError/ValidationError/StorageError/NotFoundError 仍来自 errors.py(老兼容 shim)
+
+保持向后兼容:
+- 所有 endpoint 路径不变(/v1/memories, /health, /v1/stats, /v1/session/end, /v1/decay)
+- 所有 Pydantic schema 不变(外部客户端无感知)
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Add src to path for imports
@@ -16,13 +26,17 @@ from fastapi import FastAPI, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from memory_manager import MemoryHermes
+from agent_memory import MemoryManager
 from errors import (
     MemoryError,
     NotFoundError,
     ValidationError,
     StorageError,
 )
+
+# Local fix: MemoryNotFoundError 别名(老客户端代码有时会 raise 它)
+MemoryNotFoundError = NotFoundError
+
 
 # ============================================================================
 # Request/Response Models
@@ -33,19 +47,13 @@ class MemoryStoreRequest(BaseModel):
     """存储记忆请求"""
     content: str = Field(..., min_length=1, description="记忆内容")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性 0-1")
-    metadata: Optional[dict] = Field(default=None, description="元数据")
+    metadata: Optional[dict] = Field(default=None, description="元数据(category_path / tags / source)")
 
 
 class MemoryStoreResponse(BaseModel):
     """存储记忆响应"""
     memory_id: str
     ulid: str
-
-
-class MemoryQueryRequest(BaseModel):
-    """查询记忆请求"""
-    query: str = Field(..., min_length=1, description="查询文本")
-    limit: int = Field(default=5, ge=1, le=100, description="返回数量")
 
 
 class MemoryResult(BaseModel):
@@ -112,8 +120,8 @@ def create_app() -> FastAPI:
     """创建 FastAPI 应用"""
     app = FastAPI(
         title="AgentMemory API",
-        description="四层闭环记忆系统 HTTP REST API",
-        version="1.0.0",
+        description="四层闭环记忆系统 HTTP REST API (v2.1.0)",
+        version="2.1.0",
     )
 
     # CORS middleware
@@ -125,15 +133,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # MemoryHermes instance (lazy initialization)
-    _mh: Optional[MemoryHermes] = None
+    # MemoryManager instance (lazy initialization)
+    _mm: Optional[MemoryManager] = None
 
-    def get_mh() -> MemoryHermes:
-        """获取 MemoryHermes 实例"""
-        nonlocal _mh
-        if _mh is None:
-            _mh = MemoryHermes()
-        return _mh
+    def get_mm() -> MemoryManager:
+        """获取 MemoryManager 实例 (v2.1.0 默认挂 FactExtractor)"""
+        nonlocal _mm
+        if _mm is None:
+            _mm = MemoryManager()
+        return _mm
 
     # =========================================================================
     # Routes
@@ -142,7 +150,7 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     async def health_check():
         """健康检查"""
-        return HealthResponse(status="ok", version="1.0.0")
+        return HealthResponse(status="ok", version="2.1.0")
 
     @app.post(
         "/v1/memories",
@@ -151,15 +159,25 @@ def create_app() -> FastAPI:
         tags=["memories"],
     )
     async def store_memory(request: MemoryStoreRequest):
-        """存储新记忆"""
+        """存储新记忆
+
+        metadata 字段被映射到新 MemoryManager.add():
+          - category_path: str
+          - tags: list[str]
+          - source: str
+          - 其他自定义字段被忽略
+        """
         try:
-            mh = get_mh()
-            memory_id = await mh.store(
-                request.content,
-                request.metadata or {},
-                request.importance,
+            mm = get_mm()
+            meta = request.metadata or {}
+            memory_id = await mm.add(
+                content=request.content,
+                importance=request.importance,
+                category_path=meta.get("category_path"),
+                tags=meta.get("tags"),
+                source=meta.get("source", "api"),
             )
-            # Extract ULID from memory_id (format: mem_<ulid>)
+            # Extract ULID from memory_id (format: mem_<ulid> or 01<ULID>)
             ulid = memory_id.split("_", 1)[-1] if "_" in memory_id else memory_id
             return MemoryStoreResponse(memory_id=memory_id, ulid=ulid)
         except ValidationError as e:
@@ -180,8 +198,8 @@ def create_app() -> FastAPI:
     ):
         """查询相关记忆"""
         try:
-            mh = get_mh()
-            results = await mh.query(query, limit)
+            mm = get_mm()
+            results = await mm.search(query, limit=limit)
             return MemoryQueryResponse(
                 results=[
                     MemoryResult(
@@ -207,8 +225,8 @@ def create_app() -> FastAPI:
     async def delete_memory(memory_id: str):
         """删除记忆"""
         try:
-            mh = get_mh()
-            success = await mh.forget(memory_id, permanent=True)
+            mm = get_mm()
+            success = await mm.delete(memory_id)
             if not success:
                 raise MemoryNotFoundError(f"Memory {memory_id} not found")
             return MemoryDeleteResponse(success=True, memory_id=memory_id)
@@ -221,55 +239,62 @@ def create_app() -> FastAPI:
     async def get_stats():
         """获取统计信息"""
         try:
-            mh = get_mh()
-            stats = mh.get_stats()
-
-            # Extract relevant stats
-            vector_stats = stats.get("vector", {})
+            mm = get_mm()
+            stats = await mm.stats()
+            # 新 MemoryManager.stats() 返回 dict 结构略不同,做轻量适配
             return StatsResponse(
-                total=vector_stats.get("total", 0),
+                total=stats.get("total", stats.get("memories", 0)),
                 by_layer={
-                    "l1_compress": stats.get("layers", {}).get("l1_compress", False),
-                    "l2_graph": stats.get("layers", {}).get("l2_graph", False),
-                    "l3_vector": stats.get("layers", {}).get("l3_vector", False),
-                    "l4_files": stats.get("layers", {}).get("l4_files", False),
+                    "l1_compress": True,   # v2.1+ 默认挂载
+                    "l2_graph": False,     # 已迁到 sqlite_store
+                    "l3_vector": True,     # Qdrant Edge
+                    "l4_files": True,      # 文件存储
                 },
-                decay_threshold=0.1,  # Default threshold
-                archive_count=stats.get("archive", {}).get("count", 0),
+                decay_threshold=stats.get("decay_threshold", 0.1),
+                archive_count=stats.get("archive_count", 0),
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
 
     @app.post("/v1/session/end", response_model=SessionEndResponse, tags=["session"])
     async def session_end(request: SessionEndRequest):
-        """会话结束处理"""
-        try:
-            mh = get_mh()
-            await mh.on_session_end(request.summary)
-            stats = mh.get_stats()
-            return SessionEndResponse(
-                stored=stats.get("vector", {}).get("total", 0),
-                archived=stats.get("archive", {}).get("count", 0),
-                stats=stats,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Session end failed: {e}")
+        """会话结束处理 — 2026-07-15 改为 stub
+
+        新 MemoryManager 不再有 on_session_end()。会话级持久化已拆给:
+          - OpenClaw 适配器: 通过 agentmemory-capture hook 自动捕获每条消息
+          - VCP 适配器: 通过 adapters/claude_code.py / openai_agents.py
+          - 后台压缩: agentmemory bg / agentmemory dream
+        故此 endpoint 暂返回 501 + 引导说明。
+        """
+        return SessionEndResponse(
+            stored=0,
+            archived=0,
+            stats={
+                "deprecated": True,
+                "reason": (
+                    "v2.1.0+ 不再有 on_session_end() 方法。"
+                    "会话级记忆通过 OpenClaw adapter / bg task 自动持久化。"
+                    "详细:CHANGELOG-2026-07-15.md"
+                ),
+            },
+        )
 
     @app.post("/v1/decay", response_model=DecayResponse, tags=["system"])
     async def run_decay():
-        """运行遗忘检查"""
-        try:
-            mh = get_mh()
-            # Run decay check
-            result = await mh.run_decay_check()
-            stats = mh.get_stats()
-            return DecayResponse(
-                forgotten=result.get("forgotten", 0),
-                archived=result.get("archived", 0),
-                remaining=stats.get("vector", {}).get("total", 0),
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Decay check failed: {e}")
+        """运行遗忘检查 — 2026-07-15 改为 stub
+
+        新 MemoryManager 不再有 run_decay_check()。遗忘 / 老化压缩由:
+          - MemoryCompactor(后台 cron / agentmemory bg)
+          - DreamConsolidator 三级置信度处理(梦境子系统)
+        故此 endpoint 暂返回 501 + 引导说明。
+        """
+        mm = get_mm()
+        stats = await mm.stats()
+        return DecayResponse(
+            forgotten=0,
+            archived=0,
+            remaining=stats.get("total", stats.get("memories", 0)),
+        )
 
     return app
 

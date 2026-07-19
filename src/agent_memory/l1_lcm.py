@@ -7,9 +7,22 @@ Output format: narrative paragraphs + key facts list.
 This is a simplified implementation that works without external LLM APIs.
 """
 
+from __future__ import annotations
+
 import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+
+# ---- FactExtractor 协议（避免循环 import） ----
+
+class _FactExtractorProtocol:
+    """Minimal structural type for FactExtractor bound to L1.
+
+    L1LCMCompressor 不需要 FactExtractor 全部功能,只需要判断对象存在。
+    真正的 FactExtractor 类在 fact_extractor.py。
+    """
+    pass
 
 
 # ---- Module-level helper (DRY: extracted from compress()) ----
@@ -31,14 +44,58 @@ class L1LCMCompressor:
     Uses simple extractive summarization (no external API required).
     """
 
-    def __init__(self, max_context_chars: int = 4000):
+    def __init__(
+        self,
+        max_context_chars: int = 4000,
+        fact_extractor: Optional[Any] = None,
+    ):
         """
         Initialize L1 compressor.
 
         Args:
-            max_context_chars: Maximum characters in compressed output
+            max_context_chars: Maximum characters in compressed output.
+            fact_extractor: 可选的 FactExtractor 实例(2026-07-15+ 支持)。
+                            挂上后,extract_facts_v2() 会优先走 extractor 的
+                            sync 规则路径;真正的 async + LLM 路径在
+                            MemoryManager.compress_with_facts() 中调用。
+                            不传 = 纯规则,完全向后兼容。
         """
         self.max_context_chars = max_context_chars
+        # 用 object.__setattr__ 风格避免和 property 冲突
+        self._fact_extractor = fact_extractor
+
+    @property
+    def fact_extractor(self):
+        """当前注入的 FactExtractor 实例(可能为 None)。"""
+        return getattr(self, "_fact_extractor", None)
+
+    @property
+    def has_fact_extractor(self) -> bool:
+        """是否挂上了 FactExtractor。"""
+        return self.fact_extractor is not None
+
+    def bind_fact_extractor(self, extractor: Any) -> "L1LCMCompressor":
+        """动态绑定 FactExtractor 实例。返回 self 便于链式。"""
+        self._fact_extractor = extractor
+        return self
+
+    def unbind_fact_extractor(self) -> "L1LCMCompressor":
+        """卸下 FactExtractor。返回 self。"""
+        self._fact_extractor = None
+        return self
+
+    def extract_facts_v2(self, content: str) -> List[str]:
+        """优先用 FactExtractor 的规则路径;否则回退 self.extract_facts。
+
+        注:FactExtractor.extract() 是 async;这里 L1 永远走 sync 规则路径,
+        以保持 compress() 同步语义。LLM 抽取走 compress_with_facts() async。
+        """
+        ext = self.fact_extractor
+        if ext is None:
+            return self.extract_facts(content)
+        # 复用 FactExtractor 的内部规则函数
+        from .fact_extractor import _rule_extract  # noqa: E402
+        return _rule_extract(content)
 
     def compress(self, memories: List[Dict[str, Any]], query: str = "") -> str:
         """
@@ -110,7 +167,16 @@ class L1LCMCompressor:
                 category = mem.get("meta", {}).get("category", "general")
                 tags = mem.get("meta", {}).get("tags", [])
                 tags_str = f" [{', '.join(tags)}]" if tags else ""
-                lines.append(f"- [{category}]{tags_str} {content}")
+                # 2026-07-15: Provenance 暴露 — 在每条重要事实后面标 [Source: ..., date]
+                meta = mem.get("meta", {})
+                source = meta.get("source", "")
+                created_at = meta.get("created_at", "")
+                date_str = created_at[:10] if created_at else ""  # YYYY-MM-DD
+                provenance = ""
+                if source or date_str:
+                    parts = [p for p in (source, date_str) if p]
+                    provenance = f"  *[Source: {', '.join(parts)}]*"
+                lines.append(f"- [{category}]{tags_str} {content}{provenance}")
             lines.append("")
 
         # Add normal memories
@@ -145,6 +211,12 @@ class L1LCMCompressor:
             List of extracted facts
         """
         facts = []
+        # 2026-07-15: 如果挂上了 FactExtractor,委托给它的事实分类更精细。
+        # 这里走 sync 路径(_rule_extract),与 extract_facts_v2 一致。
+        ext = self.fact_extractor
+        if ext is not None:
+            from .fact_extractor import _rule_extract  # noqa: E402
+            return _rule_extract(content)
         # P1-7 fix: handle both Chinese AND English punctuation for sentence splitting
         sentences = re.split(r'[。.!?！？]', content)
 

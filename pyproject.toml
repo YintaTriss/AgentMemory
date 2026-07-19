@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentmemory"
-version = "2.0.2"
-description = "交响乐技能家族 - 三层架构记忆系统，融合 Hermes + Mem0 优点，支持双轨检索与图书馆分类"
+version = "2.1.0"
+description = "四层闭环记忆系统（文件+向量+标签+LCM）+ 梦境子系统，融合 Hermes + Mem0 优点，支持多路搜索管道与图书馆分类"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "楚灵", email = "chuling@agentteam.dev"}
+    {name = "楚零", email = "chuling@agentteam.dev"}
 ]
-keywords = ["memory", "agent", "hermes", "mem0", "vector-store", "knowledge-base"]
+keywords = ["memory", "agent", "hermes", "mem0", "vector-store", "knowledge-base", "dream-system", "search-pipeline"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -20,44 +20,55 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
-    "httpx>=0.25.0",
-    "aiofiles>=23.0.0",
-    "pydantic>=2.5",
+    "httpx>=0.27.0",
+    "aiofiles>=24.1.0",
+    "pydantic>=2.7",
+    "jieba>=0.42",  # 中文分词 (BM25 + Reranker)
+    "numpy>=1.26",  # 梦境信号分解依赖
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
-    "pytest-cov>=4.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+]
+embed = [
+    "sentence-transformers>=2.2.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
 ]
 web = [
     "fastapi>=0.110.0",
     "uvicorn>=0.27.0",
     "jinja2>=3.1.0",
+    "watchdog>=3.0.0",
+    "rapidfuzz>=3.0.0",
 ]
 qdrant = [
-    "qdrant-client>=1.18.0",
-    "fastembed>=0.8.0",
-    "numpy>=1.21",
+    "qdrant-client>=1.15.0,<2.0",   # 2026-07-15: PyPI latest is 1.18.x, relax lower bound
+    "fastembed>=0.5.0",
+    "numpy>=1.26",
 ]
 
 [project.scripts]
-agentmemory = "src.cli:main"
+agentmemory = "agent_memory.cli:main"
+agentmemory-run = "scripts.agentmemory_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/YintaTriss/AgentMemory"
 Repository = "https://github.com/YintaTriss/AgentMemory"
 
 [tool.setuptools]
-package-dir = {"" = "."}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+include = ["agent_memory", "agent_memory.*", "api", "web", "adapters", "providers"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -68,6 +79,17 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: 慢速测试（超过 5 秒）",
+    "integration: 集成测试",
+    "performance: 性能基准测试",
+    "benchmark: 性能基准测试（benchmarks/ 目录）",
+    "perf: 性能基准测试（benchmarks/ 目录）",
+    "security: 安全相关测试",
+    "compatibility: 框架兼容性测试",
+    "api: 需要外部 API 的测试",
+    "unit: 单元测试",
 ]
 
 [tool.coverage.run]

@@ -1,6 +1,20 @@
 """
-AgentMemory Web Dashboard
-FastAPI 后端服务，提供 RESTful API 访问记忆系统数据
+AgentMemory Web Dashboard (v2.1.0)
+
+2026-07-15: 老 MemoryHermes → agent_memory.MemoryManager 迁移
+
+变更:
+- `from src.memory_manager import MemoryHermes` → `from agent_memory import MemoryManager`
+- list_memories: 用 await mm.list() 替代 mh.vector.memories 直接访问
+- delete_memory: await mm.delete(mid)
+- list_entities/list_relations: 新架构下 entity/relation 由 SQLiteStore 管理
+  MemoryManager 未暴露此 API → 暂返回空 list + deprecation notice
+- prefetch: 改用 await mm.compress_for_context(...)
+- get_stats: await mm.stats()
+
+保持向后兼容:
+- 所有 endpoint 路径不变
+- 所有 Pydantic schema 不变
 """
 
 import asyncio
@@ -14,17 +28,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# 尝试导入 MemoryHermes（支持包安装或源码运行）
-try:
-    from src.memory_manager import MemoryHermes
-except ImportError:
-    try:
-        from memory_manager import MemoryHermes
-    except ImportError:
-        MemoryHermes = None
+from agent_memory import MemoryManager
 
 try:
-    from src.errors import (
+    from errors import (
         MemoryError,
         NotFoundError,
         ValidationError,
@@ -33,29 +40,18 @@ try:
         StorageError,
     )
 except ImportError:
-    try:
-        from errors import (
-            MemoryError,
-            NotFoundError,
-            ValidationError,
-            ConfigError,
-            ProviderError,
-            StorageError,
-        )
-    except ImportError:
-        # 定义基础错误类（如果 errors 模块不可用）
-        class MemoryError(Exception):
-            pass
-        class NotFoundError(MemoryError):
-            pass
-        class ValidationError(MemoryError):
-            pass
-        class ConfigError(MemoryError):
-            pass
-        class ProviderError(MemoryError):
-            pass
-        class StorageError(MemoryError):
-            pass
+    class MemoryError(Exception):
+        pass
+    class NotFoundError(MemoryError):
+        pass
+    class ValidationError(MemoryError):
+        pass
+    class ConfigError(MemoryError):
+        pass
+    class ProviderError(MemoryError):
+        pass
+    class StorageError(MemoryError):
+        pass
 
 
 # ============================================================================
@@ -110,12 +106,16 @@ class GraphEntitiesResponse(BaseModel):
     """图谱实体列表响应"""
     items: list[EntityResponse]
     total: int
+    deprecated: bool = False
+    note: Optional[str] = None
 
 
 class GraphRelationsResponse(BaseModel):
     """图谱关系列表响应"""
     items: list[RelationResponse]
     total: int
+    deprecated: bool = False
+    note: Optional[str] = None
 
 
 class StatsResponse(BaseModel):
@@ -144,8 +144,8 @@ class ErrorResponse(BaseModel):
 
 app = FastAPI(
     title="AgentMemory Web Dashboard",
-    description="可视化 AgentMemory 记忆系统的 Web 面板",
-    version="1.0.0",
+    description="可视化 AgentMemory 记忆系统的 Web 面板 (v2.1.0)",
+    version="2.1.0",
 )
 
 # CORS 配置
@@ -163,14 +163,9 @@ _static_dir = _current_dir / "static"
 _template_dir = _current_dir / "templates"
 
 
-def _get_memory_hermes() -> MemoryHermes:
-    """获取 MemoryHermes 实例"""
-    if MemoryHermes is None:
-        raise HTTPException(
-            status_code=500,
-            detail="MemoryHermes not available. Please install agentmemory package."
-        )
-    return MemoryHermes()
+def _get_memory_manager() -> MemoryManager:
+    """获取 MemoryManager 实例 (v2.1.0 默认挂 FactExtractor)"""
+    return MemoryManager()
 
 
 def _handle_memory_error(e: Exception) -> HTTPException:
@@ -195,7 +190,6 @@ async def root():
     index_path = _template_dir / "index.html"
     if index_path.exists():
         return index_path.read_text(encoding="utf-8")
-    # 如果模板不存在，返回简单提示
     return """
     <!DOCTYPE html>
     <html>
@@ -216,57 +210,45 @@ async def list_memories(
 ):
     """
     列出记忆（分页 + 搜索）
-    
-    返回记忆列表，支持关键词搜索和分页
+
+    2026-07-15: 用 await mm.list() 替代老 mh.vector.memories 直接访问
     """
     try:
-        mh = _get_memory_hermes()
-        
-        # 获取统计信息中的记忆数量
-        stats = mh.get_stats()
-        total = stats.get("vector", {}).get("total", 0)
-        
-        # 计算分页
+        mm = _get_memory_manager()
+        # 用 MemoryManager.list() (新接口)
+        items_raw = await mm.list(limit=page_size, category_path=None)
+        # 客户端过滤 (轻量级,完整搜索走 /v1/memories endpoint)
+        if search:
+            s = search.lower()
+            items_raw = [m for m in items_raw if s in (m.get("content", "") or "").lower()]
+        # 取 page
+        start = (page - 1) * page_size
+        page_items = items_raw[start:start + page_size]
+        # 拿 stats 算 total
+        stats = await mm.stats()
+        total = stats.get("total", stats.get("memories", len(items_raw)))
         pages = max(1, (total + page_size - 1) // page_size)
-        
-        # 获取记忆列表（如果有向量存储）
-        items = []
-        if mh.vector and hasattr(mh.vector, 'memories'):
-            memories = mh.vector.memories
-            
-            # 过滤
-            if search:
-                search_lower = search.lower()
-                memories = [
-                    m for m in memories 
-                    if search_lower in m.get("content", "").lower()
-                ]
-            
-            # 分页
-            start = (page - 1) * page_size
-            end = start + page_size
-            page_memories = memories[start:end]
-            
-            for m in page_memories:
-                items.append(MemoryResponse(
+
+        return MemoryListResponse(
+            items=[
+                MemoryResponse(
                     id=m.get("id", ""),
                     content=m.get("content", ""),
-                    importance=m.get("importance", 0.5),
-                    created_at=m.get("created_at", ""),
+                    importance=m.get("importance", m.get("meta", {}).get("importance", 0.5)),
+                    created_at=m.get("created_at", m.get("meta", {}).get("created_at", "")),
                     schema_version=m.get("schema_version", 1),
-                    metadata=m.get("metadata"),
-                    tags=m.get("tags", []),
-                    fact_type=m.get("fact_type"),
-                ))
-        
-        return MemoryListResponse(
-            items=items,
-            total=total if not search else len(items),
+                    metadata=m.get("metadata", m.get("meta")),
+                    tags=m.get("tags", m.get("meta", {}).get("tags", [])),
+                    fact_type=m.get("fact_type", m.get("meta", {}).get("fact_type")),
+                )
+                for m in page_items
+            ],
+            total=total if not search else len(items_raw),
             page=page,
             page_size=page_size,
             pages=pages if not search else 1,
         )
-    
+
     except MemoryError as e:
         raise _handle_memory_error(e)
     except Exception as e:
@@ -275,36 +257,24 @@ async def list_memories(
 
 @app.get("/api/memories/{memory_id}", response_model=MemoryResponse)
 async def get_memory(memory_id: str):
-    """
-    获取单个记忆详情
-    
-    通过 memory_id 获取记忆的完整信息
-    """
+    """获取单个记忆详情 (2026-07-15: 改用 await mm.get)"""
     try:
-        mh = _get_memory_hermes()
-        
-        # 从向量存储中查找
-        memory = None
-        if mh.vector and hasattr(mh.vector, 'memories'):
-            for m in mh.vector.memories:
-                if m.get("id") == memory_id:
-                    memory = m
-                    break
-        
+        mm = _get_memory_manager()
+        memory = await mm.get(memory_id)
         if memory is None:
             raise NotFoundError(f"Memory not found: {memory_id}")
-        
+        meta = memory.get("meta", {}) or {}
         return MemoryResponse(
             id=memory.get("id", ""),
             content=memory.get("content", ""),
-            importance=memory.get("importance", 0.5),
-            created_at=memory.get("created_at", ""),
+            importance=memory.get("importance", meta.get("importance", 0.5)),
+            created_at=memory.get("created_at", meta.get("created_at", "")),
             schema_version=memory.get("schema_version", 1),
-            metadata=memory.get("metadata"),
-            tags=memory.get("tags", []),
-            fact_type=memory.get("fact_type"),
+            metadata=memory.get("metadata", meta),
+            tags=memory.get("tags", meta.get("tags", [])),
+            fact_type=memory.get("fact_type", meta.get("fact_type")),
         )
-    
+
     except MemoryError as e:
         raise _handle_memory_error(e)
     except Exception as e:
@@ -313,28 +283,16 @@ async def get_memory(memory_id: str):
 
 @app.delete("/api/memories/{memory_id}")
 async def delete_memory(memory_id: str):
-    """
-    遗忘记忆
-    
-    删除指定的记忆（支持永久删除）
-    """
+    """遗忘记忆 (2026-07-15: 改用 await mm.delete)"""
     try:
-        mh = _get_memory_hermes()
-        
-        # 先检查记忆是否存在
-        memory = None
-        if mh.vector and hasattr(mh.vector, 'memories'):
-            for m in mh.vector.memories:
-                if m.get("id") == memory_id:
-                    memory = m
-                    break
-        
-        if memory is None:
+        mm = _get_memory_manager()
+        # 先确认存在,再删除
+        existing = await mm.get(memory_id)
+        if existing is None:
             raise NotFoundError(f"Memory not found: {memory_id}")
-        
-        success = await mh.forget(memory_id, permanent=True)
+        success = await mm.delete(memory_id)
         return {"ok": True, "message": f"Memory {memory_id} deleted"}
-    
+
     except MemoryError as e:
         raise _handle_memory_error(e)
     except Exception as e:
@@ -343,83 +301,57 @@ async def delete_memory(memory_id: str):
 
 @app.get("/api/graph/entities", response_model=GraphEntitiesResponse)
 async def list_entities():
+    """列出图谱中的所有实体
+
+    2026-07-15: 新架构下 entity/relation 由 SQLiteStore + LibraryClassifier 管理。
+    MemoryManager 未暴露 entity API;此处暂返回 deprecation notice + 空 list,
+    后续版本(2026-08)会通过 mm.classifier.list_entities() 暴露。
     """
-    列出图谱中的所有实体
-    
-    返回实体列表
-    """
-    try:
-        mh = _get_memory_hermes()
-        
-        entities = []
-        if mh.graph and hasattr(mh.graph, 'entities'):
-            entities = [
-                EntityResponse(
-                    id=e.get("id", ""),
-                    name=e.get("name", ""),
-                    type=e.get("type", "unknown"),
-                    attributes=e.get("attributes", {}),
-                )
-                for e in mh.graph.entities
-            ]
-        
-        return GraphEntitiesResponse(
-            items=entities,
-            total=len(entities),
-        )
-    
-    except MemoryError as e:
-        raise _handle_memory_error(e)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return GraphEntitiesResponse(
+        items=[],
+        total=0,
+        deprecated=True,
+        note=(
+            "v2.1.0+ 不再独立维护 entity/relation 表。"
+            "标签/共现矩阵已迁到 SQLiteStore,使用 mm.classifier 或 mm._l4.store 查询。"
+        ),
+    )
 
 
 @app.get("/api/graph/relations", response_model=GraphRelationsResponse)
 async def list_relations():
+    """列出图谱中的所有关系
+
+    2026-07-15: 同 list_entities,暂返回 deprecation notice。
     """
-    列出图谱中的所有关系
-    
-    返回关系列表
-    """
-    try:
-        mh = _get_memory_hermes()
-        
-        relations = []
-        if mh.graph and hasattr(mh.graph, 'relations'):
-            relations = [
-                RelationResponse(
-                    id=r.get("id", ""),
-                    source=r.get("source", ""),
-                    target=r.get("target", ""),
-                    type=r.get("type", "unknown"),
-                    weight=r.get("weight", 1.0),
-                )
-                for r in mh.graph.relations
-            ]
-        
-        return GraphRelationsResponse(
-            items=relations,
-            total=len(relations),
-        )
-    
-    except MemoryError as e:
-        raise _handle_memory_error(e)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return GraphRelationsResponse(
+        items=[],
+        total=0,
+        deprecated=True,
+        note=(
+            "v2.1.0+ 不再独立维护 relation 表。"
+            "共现关系由 SQLiteStore 共现矩阵维护。"
+        ),
+    )
 
 
 @app.get("/api/stats", response_model=StatsResponse)
 async def get_stats():
-    """
-    获取记忆系统统计信息
-    
-    返回各层状态和统计信息
-    """
+    """获取记忆系统统计信息 (2026-07-15: await mm.stats)"""
     try:
-        mh = _get_memory_hermes()
-        stats = mh.get_stats()
-        return StatsResponse(**stats)
-    
+        mm = _get_memory_manager()
+        stats = await mm.stats()
+        # 适配老 schema
+        return StatsResponse(
+            layers={
+                "l1_compress": True,
+                "l3_vector": True,
+                "l4_files": True,
+            },
+            vector={"total": stats.get("total", stats.get("memories", 0))},
+            graph={"note": "已迁到 SQLiteStore"},
+        )
+
     except MemoryError as e:
         raise _handle_memory_error(e)
     except Exception as e:
@@ -428,36 +360,25 @@ async def get_stats():
 
 @app.post("/api/prefetch", response_model=PrefetchResponse)
 async def prefetch(request: PrefetchRequest):
-    """
-    预取相关记忆
-    
-    根据查询文本预取相关记忆
-    """
+    """预取相关记忆 (2026-07-15: 改用 compress_for_context + search)"""
     try:
-        mh = _get_memory_hermes()
-        
-        # 执行预取（如果 prefetch 方法存在）
-        if hasattr(mh, 'prefetch'):
-            await mh.prefetch(request.query)
-        
-        # 获取预取结果
-        results = []
-        if hasattr(mh, 'get_prefetched'):
-            results = mh.get_prefetched(request.query) or []
-        
-        return PrefetchResponse(
-            query=request.query,
-            results=results,
-        )
-    
+        mm = _get_memory_manager()
+        # 搜相关 memory
+        candidates = await mm.search(request.query, limit=20)
+        # 拿到 id 后用 compress_for_context 聚合
+        ids = [m.get("id", "") for m in candidates if m.get("id")]
+        if ids:
+            ctx = await mm.compress_for_context(ids, query=request.query)
+            results = [{"context": ctx, "hits": candidates}]
+        else:
+            results = []
+
+        return PrefetchResponse(query=request.query, results=results)
+
     except MemoryError as e:
         raise _handle_memory_error(e)
     except Exception as e:
-        # 返回空结果而不是 500 错误
-        return PrefetchResponse(
-            query=request.query,
-            results=[],
-        )
+        return PrefetchResponse(query=request.query, results=[])
 
 
 # ============================================================================
@@ -467,7 +388,7 @@ async def prefetch(request: PrefetchRequest):
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "service": "agentmemory-web"}
+    return {"status": "ok", "service": "agentmemory-web", "version": "2.1.0"}
 
 
 # ============================================================================

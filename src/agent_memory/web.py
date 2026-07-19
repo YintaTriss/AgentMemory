@@ -113,7 +113,13 @@ def create_app(base_dir: str = "memory", db_path: str = "data/lancedb") -> FastA
             "category_path": category,
             "source": "api",
         }
-        mem_id = await store.save(req.content, metadata)
+        # Patched 2026-07-15: web.py previously called L4FilesStore.save() with
+        # positional-arg-only signature (memory_id, content, metadata), but the
+        # migration to v2.1.0 dropped the convenience of generating memory_id.
+        # Generate it here and pass positionally.
+        import uuid as _uuid
+        mem_id = f"mem_{_uuid.uuid4().hex[:16]}"
+        await store.save(mem_id, req.content, metadata)
 
         # Also index in L3
         from .embedder import get_embedder
